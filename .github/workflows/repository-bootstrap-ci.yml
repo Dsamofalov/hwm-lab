@@ -14,13 +14,17 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Validate trusted lab skeleton
+        with:
+          persist-credentials: false
+      - name: Validate public trusted-lab skeleton
         shell: bash
         run: |
           set -euo pipefail
           test -f README.md
           test -f .github/CODEOWNERS
-          grep -q 'trusted Windows/evidence worker' README.md
+          grep -q 'Public trusted evidence/lab policy repository' README.md
+          grep -q 'currently has no raw corpus' README.md
+          grep -q 'safe for full public disclosure' README.md
           for d in job-handlers manifests tests; do
             test -f "$d/.gitkeep"
             count="$(find "$d" -type f ! -name .gitkeep | wc -l)"
