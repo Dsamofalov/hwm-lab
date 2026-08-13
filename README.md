@@ -13,6 +13,6 @@ Public trusted evidence/lab policy repository for the HeroesWM autonomous develo
 
 ## Public-data boundary
 
-Everything committed here or emitted to public Issues, PRs, Actions logs, or artifacts must be safe for full public disclosure. Do not store tokens, cookies, browser profiles, account credentials, private keys, session data, personal data, or sensitive raw evidence. Raw corpus is published only after a separate safety determination; otherwise it remains an external/local immutable input.
+Everything committed here or emitted to public Issues, PRs, Actions logs, or artifacts must be safe for full public disclosure. Do not store tokens, cookies, browser profiles, account credentials, private keys, session data, personal data, or sensitive raw evidence. Standard Git author/committer attribution metadata is expected to be public and is permitted; the personal-data prohibition applies to repository files and other public operational/generated surfaces. Raw corpus is published only after a separate safety determination; otherwise it remains an external/local immutable input.
 
 I01 creates structure and policy only. It does not implement workers, a job bus, Hyper-V pools, product-candidate execution, corpus storage, local account/browser access, or live validation.
