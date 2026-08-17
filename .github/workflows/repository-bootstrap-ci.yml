@@ -4,7 +4,9 @@ on:
   pull_request:
     branches: [main]
   push:
-    branches: [main]
+    branches:
+      - main
+      - 'agent/**'
 
 permissions:
   contents: read
@@ -13,10 +15,10 @@ jobs:
   bootstrap:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - name: Validate public trusted-lab skeleton
+      - name: Validate public trusted-lab skeleton and publisher installation
         shell: bash
         run: |
           set -euo pipefail
@@ -25,8 +27,23 @@ jobs:
           grep -q 'Public trusted evidence/lab policy repository' README.md
           grep -q 'currently has no raw corpus' README.md
           grep -q 'safe for full public disclosure' README.md
-          for d in job-handlers manifests tests; do
+          for d in job-handlers manifests; do
             test -f "$d/.gitkeep"
             count="$(find "$d" -type f ! -name .gitkeep | wc -l)"
             test "$count" -eq 0
           done
+          test -f tests/.gitkeep
+          test -f .github/workflows/task-branch-publisher.yml
+          test -f .github/workflows/infrastructure-ci.yml
+          test -f control/task_branch_publisher.py
+          test -f control/publisher_contract.py
+          test -f control/publisher_policy.py
+          test -f control/publisher_backend.py
+          test -f schemas/publish-request.bootstrap-v1.schema.json
+          test -f schemas/publish-result.bootstrap-v1.schema.json
+          grep -q 'ALLOWED_REPOSITORY = "Dsamofalov/hwm-lab"' control/publisher_contract.py
+          grep -q 'GIT_REMOTE = "https://github.com/Dsamofalov/hwm-lab.git"' control/publisher_backend.py
+      - name: Install contract validator
+        run: python -m pip install --disable-pip-version-check 'jsonschema==4.23.0'
+      - name: Run publisher contract and security tests
+        run: python -m unittest discover -s tests -p 'test_*.py' -v

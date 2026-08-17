@@ -1,0 +1,49 @@
+name: Publisher Ordinary CI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      request_id:
+        description: bootstrap publisher request id
+        required: true
+        type: string
+      new_head:
+        description: exact task-branch commit SHA to validate
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  publisher-ci:
+    name: publisher-ci
+    runs-on: ubuntu-latest
+    steps:
+      - name: Verify dispatched source SHA
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          EXPECTED_HEAD: ${{ inputs.new_head }}
+        run: |
+          case "$EXPECTED_HEAD" in
+            [0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]) ;;
+            *) echo "invalid dispatched new_head" >&2; exit 1 ;;
+          esac
+          test "$GITHUB_SHA" = "$EXPECTED_HEAD"
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.new_head || github.sha }}
+          persist-credentials: false
+      - name: Verify exact checked out HEAD
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          EXPECTED_HEAD: ${{ inputs.new_head }}
+        run: test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+      - name: Install contract validator
+        run: python -m pip install --disable-pip-version-check 'jsonschema==4.23.0'
+      - name: Run publisher contract and security tests
+        run: python -m unittest discover -s tests -p 'test_*.py' -v

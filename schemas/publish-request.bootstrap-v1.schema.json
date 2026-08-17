@@ -1,0 +1,140 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:hwm:schema:publish-request:bootstrap-v1",
+  "title": "HWM controlled task-branch publish request bootstrap-v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "request_id",
+    "repository",
+    "task_issue",
+    "task_branch",
+    "expected_head",
+    "changes",
+    "ci"
+  ],
+  "properties": {
+    "schema": {
+      "const": "hwm-publish-request/bootstrap-v1"
+    },
+    "request_id": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$"
+    },
+    "repository": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$"
+    },
+    "task_issue": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "task_branch": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 200,
+      "pattern": "^(?!/)(?!.*//)(?!.*\\s)[!-~]+(?<!/)$"
+    },
+    "expected_head": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{40}$"
+    },
+    "changes": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 64,
+      "items": {
+        "$ref": "#/$defs/change"
+      }
+    },
+    "ci": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "workflow"
+      ],
+      "properties": {
+        "workflow": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        }
+      }
+    }
+  },
+  "$defs": {
+    "sha": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{40}$"
+    },
+    "mode": {
+      "type": "string",
+      "enum": [
+        "100644",
+        "100755"
+      ]
+    },
+    "path": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 300
+    },
+    "change": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "op",
+            "path",
+            "blob_sha",
+            "mode"
+          ],
+          "properties": {
+            "op": {
+              "const": "add"
+            },
+            "path": {
+              "$ref": "#/$defs/path"
+            },
+            "blob_sha": {
+              "$ref": "#/$defs/sha"
+            },
+            "mode": {
+              "$ref": "#/$defs/mode"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "op",
+            "path",
+            "blob_sha",
+            "mode",
+            "expected_blob_sha"
+          ],
+          "properties": {
+            "op": {
+              "const": "replace"
+            },
+            "path": {
+              "$ref": "#/$defs/path"
+            },
+            "blob_sha": {
+              "$ref": "#/$defs/sha"
+            },
+            "mode": {
+              "$ref": "#/$defs/mode"
+            },
+            "expected_blob_sha": {
+              "$ref": "#/$defs/sha"
+            }
+          }
+        }
+      ]
+    }
+  }
+}

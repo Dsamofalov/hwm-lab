@@ -1,0 +1,47 @@
+name: Controlled Task Branch Publisher
+
+on:
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: read
+
+jobs:
+  preflight:
+    if: ${{ !github.event.issue.pull_request }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      should_run: ${{ steps.preflight.outputs.should_run }}
+      concurrency_key: ${{ steps.preflight.outputs.concurrency_key }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - id: preflight
+        name: Parse trusted transport metadata only
+        run: python control/run_task_branch_publisher.py preflight "$GITHUB_EVENT_PATH"
+
+  publish:
+    needs: preflight
+    if: ${{ needs.preflight.outputs.should_run == 'true' }}
+    runs-on: ubuntu-latest
+    concurrency:
+      group: hwm-publisher-${{ github.repository_id }}-${{ needs.preflight.outputs.concurrency_key }}
+      cancel-in-progress: false
+    permissions:
+      contents: write
+      issues: write
+      actions: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Publish inert Git objects with exact-head lease
+        env:
+          HWM_PUBLISHER_TOKEN: ${{ github.token }}
+        run: python control/run_task_branch_publisher.py publish "$GITHUB_EVENT_PATH"

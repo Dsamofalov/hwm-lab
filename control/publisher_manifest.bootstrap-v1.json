@@ -1,0 +1,27 @@
+{
+  "schema": "hwm-publisher-protected-paths/bootstrap-v1",
+  "exact_paths": [
+    ".github/workflows/infrastructure-ci.yml",
+    ".github/workflows/task-branch-publisher.yml",
+    "control/publisher_manifest.bootstrap-v1.json",
+    "control/run_task_branch_publisher.py",
+    "control/task_branch_publisher.py",
+    "docs/ADR/0001-controlled-task-branch-publisher-bootstrap.md",
+    "docs/acceptance/I03-P0A-controlled-publisher-bootstrap.md",
+    "docs/migration/I03-P0A-controlled-publisher-bootstrap.md",
+    "docs/publisher/I03-P0B-installation.md",
+    "schemas/publish-request.bootstrap-v1.schema.json",
+    "schemas/publish-result.bootstrap-v1.schema.json",
+    "tests/contracts/test_publish_contracts.py",
+    "tests/security/__init__.py",
+    "tests/security/test_task_branch_publisher.py"
+  ],
+  "prefixes": [
+    "control/publisher_",
+    "control/task_branch_publisher",
+    "docs/publisher/",
+    "schemas/publish-",
+    "tests/security/publisher_",
+    "tests/security/test_publisher_"
+  ]
+}
