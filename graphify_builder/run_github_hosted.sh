@@ -24,13 +24,37 @@ OUTPUT="$6"
 [[ "$PRODUCT_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "product SHA must be exact lowercase 40-hex" >&2; exit 2; }
 [[ -d "$PRODUCT_ROOT" && -f "$SOURCE_PROOF" && -f "$UPSTREAM_ROOT/uv.lock" ]] || exit 2
 
-# Provider/API/model/database credentials are rejected before any networked phase.
-python - "$PRODUCT_SHA" "$SOURCE_PROOF" <<'PY'
-import os, pathlib, sys
-from graphify_builder.runtime import assert_sensitive_environment_absent, validate_source_proof, assert_runtime
+# Product authority is the real clean detached Git checkout. The JSON source proof
+# is additional provenance only. Trusted Git uses fixed argv/shell=False and no hooks.
+python - "$PRODUCT_ROOT" "$PRODUCT_SHA" "$SOURCE_PROOF" <<'PY'
+import pathlib, sys
+from graphify_builder.runtime import (
+    assert_runtime, assert_sensitive_environment_absent,
+    validate_source_proof, verify_git_checkout,
+)
+from graphify_builder.policy import PRODUCT_REPOSITORY
 assert_runtime()
 assert_sensitive_environment_absent()
-validate_source_proof(pathlib.Path(sys.argv[2]), sys.argv[1])
+root = pathlib.Path(sys.argv[1])
+sha = sys.argv[2]
+verify_git_checkout(root, sha, PRODUCT_REPOSITORY)
+validate_source_proof(pathlib.Path(sys.argv[3]), sha, PRODUCT_REPOSITORY)
+print(f"verified_product_git_head={sha} repository={PRODUCT_REPOSITORY}")
+PY
+
+# Freeze the independently verified checkout before any networked dependency phase.
+if find "$PRODUCT_ROOT" -type l -print -quit | grep -q .; then
+  echo "product symlink forbidden" >&2
+  exit 1
+fi
+chmod -R a-w "$PRODUCT_ROOT"
+python - "$PRODUCT_ROOT" "$PRODUCT_SHA" <<'PY'
+import pathlib, sys
+from graphify_builder.policy import PRODUCT_REPOSITORY
+from graphify_builder.runtime import assert_product_read_only, verify_git_checkout
+root = pathlib.Path(sys.argv[1]); sha = sys.argv[2]
+assert_product_read_only(root)
+verify_git_checkout(root, sha, PRODUCT_REPOSITORY)
 PY
 
 # Phase A: only immutable lock-selected wheels may be fetched; the Python
@@ -40,25 +64,20 @@ python -m graphify_builder.wheelhouse \
   --license-root "$UPSTREAM_ROOT" \
   --wheelhouse "$WHEELHOUSE"
 
-# Source readiness is metadata-only: no product module/script/hook/test/build step
-# is invoked. Read-only status is established before the network-denied phase.
-if find "$PRODUCT_ROOT" -type l -print -quit | grep -q .; then
-  echo "product symlink forbidden" >&2
-  rm -rf "$WHEELHOUSE"
-  exit 1
-fi
-chmod -R a-w "$PRODUCT_ROOT"
-[[ ! -w "$PRODUCT_ROOT" ]] || { rm -rf "$WHEELHOUSE"; exit 1; }
-
 PYTHON="$(python -c 'import sys; print(sys.executable)')"
+python - <<'PY'
+from graphify_builder.runtime import assert_runtime
+assert_runtime()
+PY
 UID_NOW="$(id -u)"
 GID_NOW="$(id -g)"
 mkdir -p "$OUTPUT"
 
 # Phase B: network is denied before the builder parses product content. Root is
 # used only to create namespaces; setpriv immediately drops back to the runner
-# uid/gid before any product parsing. The Python parent then establishes the
-# exact v2 timeout boundary and starts the 900-second monotonic clock.
+# uid/gid before any product parsing. The Python parent establishes the exact
+# v2 boundary and starts the 900-second monotonic clock only after re-verifying
+# the frozen Git checkout, wheelhouse, network denial, provider deny, and read-only source.
 sudo unshare --net --mount --pid --fork --mount-proc \
   setpriv --reuid="$UID_NOW" --regid="$GID_NOW" --init-groups \
   env -i \

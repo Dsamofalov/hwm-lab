@@ -14,7 +14,12 @@ from pathlib import Path
 from .normalize import (
     GraphOutputError, OversizedSnapshotError, SnapshotSchemaError, canonical_json, normalize_graph,
 )
-from .policy import EXACT_GRAPHIFY_COMMAND, PROVIDER_ENVIRONMENT_DENY, ADDITIONAL_CREDENTIAL_ENV_DENY
+from .policy import (
+    ADDITIONAL_CREDENTIAL_ENV_DENY,
+    EXACT_GRAPHIFY_COMMAND,
+    GRAPHIFY_PACKAGE,
+    PROVIDER_ENVIRONMENT_DENY,
+)
 from .runtime import BoundaryError, assert_product_read_only, assert_runtime, assert_sensitive_environment_absent, assert_network_denied
 from .wheelhouse import WheelhouseError, verify_wheelhouse
 
@@ -84,8 +89,15 @@ def execute(product_root: Path, product_sha: str, wheelhouse: Path, output: Path
         assert_product_read_only(product_root)
         manifest = verify_wheelhouse(wheelhouse)
         artifacts = [wheelhouse / item["filename"] for item in manifest["artifacts"]]
+        graphify_artifact = [item for item in manifest["artifacts"] if item.get("name") == GRAPHIFY_PACKAGE]
+        if len(graphify_artifact) != 1:
+            raise WheelhouseError("exact Graphify artifact identity missing")
+        print(
+            f"hwm_graphify_wheel={graphify_artifact[0]['filename']} "
+            f"sha256={graphify_artifact[0]['sha256']}",
+            flush=True,
+        )
 
-        # offline-installation
         venv = scratch / "venv"
         subprocess.run([sys.executable, "-m", "venv", str(venv)], check=True, env=_safe_graphify_env(Path("/nonexistent"), scratch / "unused", scratch / "home"))
         venv_python = venv / "bin" / "python"
@@ -95,10 +107,10 @@ def execute(product_root: Path, product_sha: str, wheelhouse: Path, output: Path
             stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
         )
 
-        # exact-structural-graphify-invocation
         graph_out = scratch / "graphify-out"
         home = scratch / "home"; home.mkdir(exist_ok=True)
         env = _safe_graphify_env(venv / "bin", graph_out, home)
+        print("hwm_graphify_command=" + " ".join(EXACT_GRAPHIFY_COMMAND), flush=True)
         result = subprocess.run(
             list(EXACT_GRAPHIFY_COMMAND), cwd=product_root, env=env,
             stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
@@ -106,7 +118,6 @@ def execute(product_root: Path, product_sha: str, wheelhouse: Path, output: Path
         if result.returncode != 0:
             raise InvocationError(f"Graphify structural extraction failed ({result.returncode}): {result.stderr[-2000:]}")
 
-        # output-parsing
         graph_path = graph_out / "graph.json"
         if not graph_path.is_file():
             raise GraphOutputError("Graphify graph.json missing")
@@ -115,7 +126,6 @@ def execute(product_root: Path, product_sha: str, wheelhouse: Path, output: Path
         except Exception as exc:
             raise GraphOutputError("Graphify graph.json malformed") from exc
 
-        # normalization + schema-validation + digest-calculation
         snapshot, snapshot_bytes, snapshot_sha = normalize_graph(graph, product_sha, product_root)
         metadata = {
             "schema": "hwm-graph-metadata/v1",
@@ -129,7 +139,6 @@ def execute(product_root: Path, product_sha: str, wheelhouse: Path, output: Path
         }
         health = _health("healthy_current", product_sha, "exact_sha_structural_build_complete", snapshot_sha=snapshot_sha)
 
-        # canonical-artifact-emission: stage all bytes first, then expose final names.
         staged = scratch / "emit"; staged.mkdir()
         (staged / "snapshot.json").write_bytes(snapshot_bytes)
         (staged / "metadata.json").write_bytes(canonical_json(metadata))
@@ -137,6 +146,7 @@ def execute(product_root: Path, product_sha: str, wheelhouse: Path, output: Path
         for name in ("snapshot.json", "metadata.json", "health.json"):
             os.replace(staged / name, output / name)
         _write_atomic(output / ".canonical-emission-complete", b"complete")
+        print(f"hwm_canonical_snapshot_sha256={snapshot_sha}", flush=True)
         return 0
     except OversizedSnapshotError as exc:
         state, reason, detail = "oversized_artifact", "snapshot_over_67108864_bytes", str(exc)
