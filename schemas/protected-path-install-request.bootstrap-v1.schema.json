@@ -1,0 +1,177 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:hwm:schema:protected-path-install-request:bootstrap-v1",
+  "title": "HWM controlled protected-path install request bootstrap-v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "request_id",
+    "repository",
+    "architecture_issue",
+    "task_id",
+    "installation_branch",
+    "expected_head",
+    "protected_main_base_sha",
+    "issue_declared_paths",
+    "changes",
+    "commit_message",
+    "trusted_validation"
+  ],
+  "properties": {
+    "schema": {
+      "const": "hwm-protected-path-install-request/bootstrap-v1"
+    },
+    "request_id": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$"
+    },
+    "repository": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$"
+    },
+    "architecture_issue": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "task_id": {
+      "type": "string",
+      "pattern": "^I[0-9]{2}-[0-9]{4}$"
+    },
+    "installation_branch": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 200,
+      "pattern": "^agent/infra-[0-9]{4}-[A-Za-z0-9._-]+$"
+    },
+    "expected_head": {
+      "$ref": "#/$defs/sha"
+    },
+    "protected_main_base_sha": {
+      "$ref": "#/$defs/sha"
+    },
+    "changes": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 32,
+      "items": {
+        "$ref": "#/$defs/change"
+      }
+    },
+    "commit_message": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 240,
+      "pattern": "^[^\\r\\n]+$"
+    },
+    "trusted_validation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "workflow",
+        "required_check",
+        "protected_source_ref"
+      ],
+      "properties": {
+        "workflow": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9._-]+\\.ya?ml$"
+        },
+        "required_check": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "protected_source_ref": {
+          "const": "refs/heads/main"
+        }
+      }
+    },
+    "issue_declared_paths": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 32,
+      "uniqueItems": true,
+      "items": {
+        "$ref": "#/$defs/protected_path"
+      }
+    }
+  },
+  "$defs": {
+    "sha": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{40}$"
+    },
+    "mode": {
+      "type": "string",
+      "enum": [
+        "100644",
+        "100755"
+      ]
+    },
+    "protected_path": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 300,
+      "pattern": "^(?!.*//)(?!.*\\\\)(?!.*(?:^|/)\\.{1,2}(?:/|$))\\.github/(?:workflows/[A-Za-z0-9._/-]+\\.ya?ml|actions/[A-Za-z0-9._/-]+)$"
+    },
+    "change": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "op",
+            "path",
+            "blob_sha",
+            "mode"
+          ],
+          "properties": {
+            "op": {
+              "const": "add"
+            },
+            "path": {
+              "$ref": "#/$defs/protected_path"
+            },
+            "blob_sha": {
+              "$ref": "#/$defs/sha"
+            },
+            "mode": {
+              "$ref": "#/$defs/mode"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "op",
+            "path",
+            "blob_sha",
+            "mode",
+            "expected_blob_sha"
+          ],
+          "properties": {
+            "op": {
+              "const": "replace"
+            },
+            "path": {
+              "$ref": "#/$defs/protected_path"
+            },
+            "blob_sha": {
+              "$ref": "#/$defs/sha"
+            },
+            "mode": {
+              "$ref": "#/$defs/mode"
+            },
+            "expected_blob_sha": {
+              "$ref": "#/$defs/sha"
+            }
+          }
+        }
+      ]
+    }
+  }
+}

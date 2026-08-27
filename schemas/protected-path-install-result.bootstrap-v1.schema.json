@@ -1,0 +1,353 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:hwm:schema:protected-path-install-result:bootstrap-v1",
+  "title": "HWM controlled protected-path install result bootstrap-v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "request_id",
+    "status",
+    "repository",
+    "architecture_issue",
+    "task_id",
+    "installation_branch",
+    "expected_head",
+    "protected_main_base_sha",
+    "observed_head_before",
+    "request_fingerprint",
+    "idempotent_replay"
+  ],
+  "properties": {
+    "schema": {
+      "const": "hwm-protected-path-install-result/bootstrap-v1"
+    },
+    "request_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128
+    },
+    "status": {
+      "type": "string",
+      "enum": [
+        "success",
+        "error"
+      ]
+    },
+    "repository": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "architecture_issue": {
+      "type": [
+        "integer",
+        "null"
+      ],
+      "minimum": 1
+    },
+    "task_id": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "installation_branch": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "expected_head": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/sha"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "protected_main_base_sha": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/sha"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "observed_head_before": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/sha"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "request_fingerprint": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "idempotent_replay": {
+      "type": "boolean"
+    },
+    "new_head": {
+      "$ref": "#/$defs/sha"
+    },
+    "commit_sha": {
+      "$ref": "#/$defs/sha"
+    },
+    "changes": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "$ref": "#/$defs/change"
+      }
+    },
+    "trusted_validation": {
+      "$ref": "#/$defs/validation"
+    },
+    "error": {
+      "$ref": "#/$defs/error"
+    }
+  },
+  "oneOf": [
+    {
+      "properties": {
+        "status": {
+          "const": "success"
+        },
+        "repository": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$"
+        },
+        "architecture_issue": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "task_id": {
+          "type": "string",
+          "pattern": "^I[0-9]{2}-[0-9]{4}$"
+        },
+        "installation_branch": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200
+        },
+        "expected_head": {
+          "$ref": "#/$defs/sha"
+        },
+        "protected_main_base_sha": {
+          "$ref": "#/$defs/sha"
+        },
+        "observed_head_before": {
+          "$ref": "#/$defs/sha"
+        }
+      },
+      "required": [
+        "new_head",
+        "commit_sha",
+        "changes",
+        "trusted_validation"
+      ],
+      "not": {
+        "required": [
+          "error"
+        ]
+      }
+    },
+    {
+      "properties": {
+        "status": {
+          "const": "error"
+        }
+      },
+      "required": [
+        "error"
+      ],
+      "not": {
+        "anyOf": [
+          {
+            "required": [
+              "new_head"
+            ]
+          },
+          {
+            "required": [
+              "commit_sha"
+            ]
+          },
+          {
+            "required": [
+              "changes"
+            ]
+          },
+          {
+            "required": [
+              "trusted_validation"
+            ]
+          }
+        ]
+      }
+    }
+  ],
+  "$defs": {
+    "sha": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{40}$"
+    },
+    "change": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "op",
+            "path",
+            "blob_sha",
+            "mode"
+          ],
+          "properties": {
+            "op": {
+              "const": "add"
+            },
+            "path": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 300
+            },
+            "blob_sha": {
+              "$ref": "#/$defs/sha"
+            },
+            "mode": {
+              "type": "string",
+              "enum": [
+                "100644",
+                "100755"
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "op",
+            "path",
+            "blob_sha",
+            "mode",
+            "expected_blob_sha"
+          ],
+          "properties": {
+            "op": {
+              "const": "replace"
+            },
+            "path": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 300
+            },
+            "blob_sha": {
+              "$ref": "#/$defs/sha"
+            },
+            "mode": {
+              "type": "string",
+              "enum": [
+                "100644",
+                "100755"
+              ]
+            },
+            "expected_blob_sha": {
+              "$ref": "#/$defs/sha"
+            }
+          }
+        }
+      ]
+    },
+    "validation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "workflow",
+        "required_check",
+        "run_id",
+        "head_sha",
+        "source_ref"
+      ],
+      "properties": {
+        "workflow": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "required_check": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "head_sha": {
+          "$ref": "#/$defs/sha"
+        },
+        "source_ref": {
+          "const": "refs/heads/main"
+        },
+        "run_id": {
+          "type": "integer",
+          "minimum": 1
+        }
+      }
+    },
+    "error": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "code",
+        "message",
+        "retryable"
+      ],
+      "properties": {
+        "code": {
+          "type": "string",
+          "enum": [
+            "INVALID_SCHEMA",
+            "UNAUTHORIZED_AUTHOR",
+            "REPOSITORY_NOT_ALLOWED",
+            "ARCHITECTURE_ISSUE_NOT_CLAIMED",
+            "REQUIRED_LABEL_MISSING",
+            "ISSUE_TASK_BRANCH_MISMATCH",
+            "EXPECTED_HEAD_MISMATCH",
+            "PROTECTED_MAIN_BASE_MISMATCH",
+            "DEFAULT_BRANCH_FORBIDDEN",
+            "UNDECLARED_PATH",
+            "PATH_CLASS_FORBIDDEN",
+            "SELF_MODIFICATION_FORBIDDEN",
+            "ORDINARY_PUBLISHER_MODIFICATION_FORBIDDEN",
+            "BOOTSTRAP_WORKFLOW_MODIFICATION_FORBIDDEN",
+            "CODEOWNERS_FORBIDDEN",
+            "RULESET_OR_SETTINGS_FORBIDDEN",
+            "SECRET_OR_ENVIRONMENT_PATH_FORBIDDEN",
+            "PATH_STATE_MISMATCH",
+            "BLOB_NOT_FOUND",
+            "BLOB_NOT_REGULAR",
+            "REQUEST_ID_REUSE",
+            "TRUSTED_VALIDATION_FAILED",
+            "INTERNAL_ERROR"
+          ]
+        },
+        "message": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 240
+        },
+        "retryable": {
+          "type": "boolean"
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,99 @@
+name: Controlled Protected Path Installer
+run-name: protected-path ${{ inputs.request_id || github.event.comment.id }}
+
+on:
+  issue_comment:
+    types: [created]
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: trusted installer operation
+        required: true
+        type: string
+      carrier_issue:
+        description: exact hwm-lab carrier Issue number
+        required: true
+        type: string
+      request_comment_id:
+        description: exact hwm-lab carrier request comment id
+        required: true
+        type: string
+      request_id:
+        description: exact protected-path request id
+        required: true
+        type: string
+      request_fingerprint:
+        description: normalized request SHA-256 fingerprint
+        required: true
+        type: string
+      candidate_commit_sha:
+        description: exact inert candidate commit SHA
+        required: true
+        type: string
+      protected_main_base_sha:
+        description: exact protected main SHA that must source validation
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  preflight:
+    if: ${{ github.event_name == 'issue_comment' && !github.event.issue.pull_request }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      should_run: ${{ steps.preflight.outputs.should_run }}
+      concurrency_key: ${{ steps.preflight.outputs.concurrency_key }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - id: preflight
+        name: Parse unprivileged transport metadata only
+        run: python control/protected_path_installer.py preflight "$GITHUB_EVENT_PATH"
+
+  install:
+    needs: preflight
+    if: ${{ needs.preflight.outputs.should_run == 'true' }}
+    runs-on: ubuntu-latest
+    concurrency:
+      group: hwm-protected-path-${{ github.repository_id }}-${{ needs.preflight.outputs.concurrency_key }}
+      cancel-in-progress: false
+    permissions:
+      contents: write
+      issues: write
+      actions: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Validate inert candidate then non-force update dedicated branch
+        env:
+          HWM_PROTECTED_PATH_INSTALLER_TOKEN: ${{ github.token }}
+        run: python control/protected_path_installer.py install "$GITHUB_EVENT_PATH"
+
+  trusted-static:
+    name: protected-path-installer/trusted-static
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.mode == 'validate' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: read
+    steps:
+      - name: Verify protected validation source SHA
+        env:
+          EXPECTED_PROTECTED_MAIN: ${{ inputs.protected_main_base_sha }}
+        run: test "$GITHUB_SHA" = "$EXPECTED_PROTECTED_MAIN"
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.protected_main_base_sha }}
+          persist-credentials: false
+      - name: Inspect exact candidate Git objects without checkout or execution
+        env:
+          HWM_PROTECTED_PATH_INSTALLER_TOKEN: ${{ github.token }}
+        run: python control/protected_path_installer.py validate "$GITHUB_EVENT_PATH"
