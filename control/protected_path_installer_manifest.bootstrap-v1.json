@@ -1,0 +1,27 @@
+{
+  "schema": "hwm-protected-path-installer-manifest/bootstrap-v1",
+  "repository": "Dsamofalov/hwm-lab",
+  "architecture_repository": "Dsamofalov/hwm-control",
+  "protected_source_ref": "refs/heads/main",
+  "trusted_validation": {
+    "workflow": "protected-path-installer.yml",
+    "required_check": "protected-path-installer/trusted-static"
+  },
+  "allowed_path_prefixes": [
+    ".github/workflows/",
+    ".github/actions/"
+  ],
+  "self_paths": [
+    ".github/workflows/protected-path-installer.yml"
+  ],
+  "ordinary_publisher_paths": [
+    ".github/workflows/task-branch-publisher.yml"
+  ],
+  "bootstrap_workflow_paths": [
+    ".github/workflows/repository-bootstrap-ci.yml"
+  ],
+  "regular_modes": [
+    "100644",
+    "100755"
+  ]
+}
