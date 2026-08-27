@@ -1,0 +1,16 @@
+{
+  "schema": "hwm-i10-0085-carrier-claim/v1",
+  "control_issue": "Dsamofalov/hwm-control#85",
+  "task_id": "I10-0085",
+  "carrier_issue": "Dsamofalov/hwm-lab#7",
+  "protected_base": "18f24ccc0866b29c24c56659479ca02f20fb4b9c",
+  "branch": "agent/infra-0007-i10-0085-graphify-runtime-acquisition",
+  "scope": "exact in-job Graphify acceptance runtime acquisition",
+  "prohibitions": [
+    "do not modify .github/**",
+    "do not invoke or repair protected-path installer",
+    "do not modify or resume hwm-control#73 source",
+    "do not publish a production graph",
+    "do not mutate hwm-context or hwm_predictor"
+  ]
+}
