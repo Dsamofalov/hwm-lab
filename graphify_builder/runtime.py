@@ -5,6 +5,7 @@ import json
 import os
 import platform
 import re
+import socket
 import stat
 import subprocess
 from pathlib import Path
@@ -238,9 +239,12 @@ def assert_sensitive_environment_absent(env: dict[str, str] | None = None) -> No
         raise BoundaryError("credential/provider environment exposure: " + ",".join(sorted(exposed)))
 
 
-def assert_network_denied(sys_net: Path = Path("/sys/class/net"), proc_route: Path = Path("/proc/net/route")) -> None:
+def assert_network_denied(sys_net: Path | None = None, proc_route: Path = Path("/proc/net/route")) -> None:
     try:
-        interfaces = {p.name for p in sys_net.iterdir()}
+        if sys_net is None:
+            interfaces = {name for _, name in socket.if_nameindex()}
+        else:
+            interfaces = {p.name for p in sys_net.iterdir()}
     except OSError as exc:
         raise BoundaryError("cannot prove network namespace state") from exc
     if interfaces - {"lo"}:
