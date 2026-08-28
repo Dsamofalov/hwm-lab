@@ -397,8 +397,6 @@ def _scan_inventory(
     records.sort(key=lambda item: (item.normalized_path, item.member_type, item.raw_name))
     by_path = {item.normalized_path: item for item in records}
 
-    # Complete namespace validation before any filesystem output: every non-top-level
-    # member must have an explicit canonical real-directory parent in the inventory.
     for item in records:
         parts = item.normalized_path.split("/")
         for index in range(1, len(parts)):
@@ -544,7 +542,6 @@ def _extract_verified_archive(
     layout: _ArchiveLayoutContract = EXACT_LAYOUT,
     timeout: int = SETUP_TIMEOUT_SECONDS,
 ) -> ArchiveInventory:
-    # Pass 0 is complete and side-effect free with respect to install_root.
     inventory = _validate_exact_inventory(archive_path, layout=layout)
     if os.path.lexists(install_root):
         raise RuntimeAcquisitionError(f"runtime install target already exists: {install_root}")
@@ -567,7 +564,6 @@ def _extract_verified_archive(
                 key=lambda item: by_raw[item.raw_name].offset,
             )
 
-            # Pass 1a: explicit canonical directories only.
             for item in directories:
                 _check_deadline(deadline)
                 target = _path_from_canonical(install_root, item.normalized_path)
@@ -577,7 +573,6 @@ def _extract_verified_archive(
                 target.mkdir(mode=item.mode & 0o777)
                 os.chmod(target, item.mode & 0o777)
 
-            # Pass 1b: regular payloads only, never through tarfile.extract().
             for item in regulars:
                 _check_deadline(deadline)
                 target = _path_from_canonical(install_root, item.normalized_path)
@@ -607,7 +602,6 @@ def _extract_verified_archive(
                     )
                 os.chmod(target, item.mode & 0o777)
 
-        # Pass 2: exact allowlisted symlinks only, after all real objects exist.
         for item in (record for record in inventory.records if record.member_type == "symlink"):
             _check_deadline(deadline)
             target = _path_from_canonical(install_root, item.normalized_path)
@@ -824,7 +818,16 @@ def _find_exact_python(install_root: Path) -> Path:
     return candidate
 
 
+def _runtime_environment(install_root: Path) -> dict[str, str]:
+    environment = dict(os.environ)
+    environment["LD_LIBRARY_PATH"] = str(install_root / "lib")
+    environment["PYTHONHOME"] = str(install_root)
+    environment["PYTHONNOUSERSITE"] = "1"
+    return environment
+
+
 def _report_python(python: Path) -> str:
+    install_root = python.parent.parent
     try:
         result = subprocess.run(
             [str(python), "-c", "import platform; print(platform.python_implementation(), platform.python_version())"],
@@ -832,6 +835,7 @@ def _report_python(python: Path) -> str:
             capture_output=True,
             text=True,
             timeout=30,
+            env=_runtime_environment(install_root),
         )
     except (OSError, subprocess.SubprocessError) as exc:
         raise RuntimeAcquisitionError(f"verified runtime executable failed: {exc}") from exc
@@ -842,7 +846,8 @@ def _report_python(python: Path) -> str:
 
 
 class NetworkDeniedExecutor:
-    def __init__(self):
+    def __init__(self, install_root):
+        self.install_root = Path(install_root)
         self.network_denied = True
 
     def command_for(self, phase: str, command: list[str]) -> list[str]:
@@ -855,7 +860,12 @@ class NetworkDeniedExecutor:
         return [
             "sudo", "--non-interactive", "unshare", "--net", "--",
             "setpriv", f"--reuid={uid}", f"--regid={gid}", "--clear-groups",
-            "--no-new-privs", "--", *command,
+            "--no-new-privs", "--",
+            "/usr/bin/env",
+            f"LD_LIBRARY_PATH={self.install_root / 'lib'}",
+            f"PYTHONHOME={self.install_root}",
+            "PYTHONNOUSERSITE=1",
+            *command,
         ]
 
     def run(self, phase: str, command: list[str], *, timeout: int):
@@ -920,7 +930,7 @@ class ExactRuntimeSession:
     def seal_network(self) -> NetworkDeniedExecutor:
         if self.provenance is None or self.python is None:
             raise RuntimeAcquisitionError("runtime must be ready before network denial")
-        self._network_executor = NetworkDeniedExecutor()
+        self._network_executor = NetworkDeniedExecutor(self.install_root)
         return self._network_executor
 
     def begin_builder_timer(self) -> float:
