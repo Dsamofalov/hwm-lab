@@ -1,0 +1,6 @@
+{
+  "schema": "hwm-i10-0085-live-acceptance/v1",
+  "task": "I10-0085",
+  "purpose": "Enable mandatory exact pinned-artifact GitHub-hosted runtime-v2 acceptance on this exact controlled head.",
+  "runtime_contract": "hwm-graphify-acceptance-runtime/v2"
+}
