@@ -174,6 +174,71 @@ def _is_d2_file_node(node: dict) -> bool:
     )
 
 
+_D3_CLASS_MISSING_DISCRIMINATOR_SIGNATURE = {
+    "keys": [
+        "_callable", "_callable_class", "_origin", "file_type",
+        "id", "label", "source_file", "source_location",
+    ],
+    "key_types": {
+        "_callable": "boolean",
+        "_callable_class": "boolean",
+        "_origin": "string",
+        "file_type": "string",
+        "id": "string",
+        "label": "string",
+        "source_file": "string",
+        "source_location": "string",
+    },
+    "label_matches_source_basename": False,
+    "source_location_shape": "line",
+}
+
+_D3_FUNCTION_MISSING_DISCRIMINATOR_SIGNATURE = {
+    "keys": [
+        "_callable", "_origin", "file_type", "id", "label",
+        "source_file", "source_location",
+    ],
+    "key_types": {
+        "_callable": "boolean",
+        "_origin": "string",
+        "file_type": "string",
+        "id": "string",
+        "label": "string",
+        "source_file": "string",
+        "source_location": "string",
+    },
+    "label_matches_source_basename": False,
+    "source_location_shape": "line",
+}
+
+
+def _d3_compat_node_kind(node: dict) -> str | None:
+    if node.get("file_type") != "code":
+        return None
+    signature = _missing_discriminator_signature(node)
+    if signature == _D3_CLASS_MISSING_DISCRIMINATOR_SIGNATURE:
+        kind = "class"
+    elif signature == _D3_FUNCTION_MISSING_DISCRIMINATOR_SIGNATURE:
+        kind = "function"
+    else:
+        return None
+    if Path(node["source_file"]).name == node["label"]:
+        return None
+    return kind
+
+
+def _missing_discriminator_kind(node: dict) -> str | None:
+    kinds = []
+    if _is_d2_file_node(node):
+        kinds.append("file")
+    d3_kind = _d3_compat_node_kind(node)
+    if d3_kind is not None:
+        kinds.append(d3_kind)
+    if len(kinds) > 1:
+        raise GraphOutputError("ambiguous missing-discriminator node kind")
+    return kinds[0] if kinds else None
+
+
 def _preflight_missing_node_discriminators(nodes: list) -> None:
     groups: dict[str, dict] = {}
     for node in nodes:
@@ -190,7 +255,7 @@ def _preflight_missing_node_discriminators(nodes: list) -> None:
             raise GraphOutputError("Graphify node id is unusable")
         if any(key in node for key in ("type", "kind", "node_type")):
             continue
-        if _is_d2_file_node(node):
+        if _missing_discriminator_kind(node) is not None:
             continue
         signature = _missing_discriminator_signature(node)
         signature_key = canonical_json(signature).decode("utf-8")
@@ -230,15 +295,9 @@ def _preflight_missing_node_discriminators(nodes: list) -> None:
 
 def _node_kind(node: dict) -> str:
     if not any(key in node for key in ("type", "kind", "node_type")):
-        source_file = node.get("source_file")
-        label = node.get("label")
-        if (
-            node.get("file_type") == "code"
-            and isinstance(source_file, str) and source_file
-            and isinstance(label, str) and label
-            and Path(source_file).name == label
-        ):
-            return "file"
+        fallback = _missing_discriminator_kind(node)
+        if fallback is not None:
+            return fallback
     value = node.get("type", node.get("kind", node.get("node_type")))
     return _text(value, field="node kind", max_len=64, nonempty=True)
 

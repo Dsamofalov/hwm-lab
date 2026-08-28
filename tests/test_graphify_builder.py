@@ -5,6 +5,9 @@ from unittest import mock
 from graphify_builder import normalize,policy,run,runtime,wheelhouse,worker
 SHA="8fd669336b36064e842252d69fb4016cc526a9d4"
 def graph(): return {"nodes":[{"id":"b","type":"function","label":"pkg.beta","source_file":"pkg/b.py","source_location":"L8-L10"},{"id":"a","type":"class","label":"pkg.Alpha","source_file":"pkg/a.py","source_location":"L2-L6"}],"edges":[{"source":"a","target":"b","relation":"calls"}],"metadata":{"generated_at":"ignored"}}
+def d4_class_node(): return {"_callable":True,"_callable_class":False,"_origin":"source","file_type":"code","id":"pkg_a_a","label":"A","source_file":"a.py","source_location":"L1"}
+def d4_function_node(): return {"_callable":False,"_origin":"source","file_type":"code","id":"pkg_a_f","label":"f()","source_file":"a.py","source_location":"L3"}
+def d4_file_node(): return {"id":"pkg_a","label":"a.py","file_type":"code","source_file":"a.py","source_location":"L1"}
 class T(unittest.TestCase):
  def test_01_exact_sha_and_three_run_determinism(self):
   with tempfile.TemporaryDirectory() as d:
@@ -110,6 +113,62 @@ class T(unittest.TestCase):
   with self.assertRaisesRegex(normalize.GraphOutputError,'node kind must be text'):normalize.normalize_graph({"nodes":[malformed],"edges":[]},SHA,Path('/tmp/not-used'))
   with tempfile.TemporaryDirectory() as d:
    r=Path(d);(r/'pkg').mkdir();snapshot,encoded,digest=normalize.normalize_graph(graph(),SHA,r);self.assertEqual([n['kind'] for n in snapshot['nodes']],['class','function']);self.assertEqual(hashlib.sha256(encoded).hexdigest(),digest)
+ def test_15d_exact_d3_class_signature_maps_class(self):
+  self.assertEqual(normalize._node_kind(d4_class_node()),"class")
+ def test_15e_exact_d3_function_signature_maps_function(self):
+  self.assertEqual(normalize._node_kind(d4_function_node()),"function")
+ def test_15f_d4_exact_shapes_are_closed_and_type_strict(self):
+  for base in (d4_class_node,d4_function_node):
+   n=base();n["extra"]=True
+   with self.subTest(shape=base.__name__,case="extra"):
+    with self.assertRaises(normalize.GraphOutputError):normalize._node_kind(n)
+  for base,field in ((d4_class_node,"_origin"),(d4_function_node,"_origin")):
+   n=base();del n[field]
+   with self.subTest(shape=base.__name__,case="removed"):
+    with self.assertRaises(normalize.GraphOutputError):normalize._node_kind(n)
+  for base,field,value in ((d4_class_node,"_callable",1),(d4_class_node,"_callable_class",1),(d4_class_node,"_origin",1),(d4_function_node,"_callable",1),(d4_function_node,"_origin",1),(d4_class_node,"file_type","document"),(d4_function_node,"file_type","document")):
+   n=base();n[field]=value
+   with self.subTest(shape=base.__name__,field=field,value=value):
+    with self.assertRaises(normalize.GraphOutputError):normalize._node_kind(n)
+  for base in (d4_class_node,d4_function_node):
+   for field in ("id","label","source_file","source_location"):
+    n=base();n[field]=7
+    with self.subTest(shape=base.__name__,field=field):
+     with self.assertRaises(normalize.GraphOutputError):normalize._node_kind(n)
+   n=base();n["source_location"]="L1-L2"
+   with self.subTest(shape=base.__name__,case="line-range"):
+    with self.assertRaises(normalize.GraphOutputError):normalize._node_kind(n)
+  n=d4_class_node();n["_callable"]=False;n["_callable_class"]=True;n["_origin"]="other";self.assertEqual(normalize._node_kind(n),"class")
+  n=d4_function_node();n["_callable"]=True;n["_origin"]="other";self.assertEqual(normalize._node_kind(n),"function")
+ def test_15g_d4_preserves_d2_and_explicit_precedence_and_fails_ambiguous_closed(self):
+  self.assertEqual(normalize._node_kind(d4_file_node()),"file")
+  n=d4_class_node();n.update({"type":"module","kind":"function","node_type":"class"});self.assertEqual(normalize._node_kind(n),"module")
+  n=d4_function_node();n.update({"kind":"module","node_type":"class"});self.assertEqual(normalize._node_kind(n),"module")
+  n=d4_function_node();n["node_type"]="module";self.assertEqual(normalize._node_kind(n),"module")
+  n=d4_class_node();n["type"]={}
+  with self.assertRaisesRegex(normalize.GraphOutputError,"node kind must be text"):normalize._node_kind(n)
+  for base in (d4_class_node,d4_function_node):
+   n=base();n["label"]="a.py"
+   with self.subTest(shape=base.__name__,case="d2-basename"):
+    self.assertEqual(normalize._node_kind(n),"file")
+  with mock.patch.object(normalize,"_d3_compat_node_kind",return_value="class"):
+   with self.assertRaisesRegex(normalize.GraphOutputError,"ambiguous missing-discriminator node kind"):normalize._missing_discriminator_kind(d4_file_node())
+ def test_15h_d4_unknown_reduced_extended_and_line_shapes_remain_fail_closed(self):
+  bad=(
+   {**d4_function_node(),"symbol_scope":["local"]},
+   {k:v for k,v in d4_function_node().items() if k!="source_location"},
+   {**d4_class_node(),"symbol_scope":["local"]},
+   {k:v for k,v in d4_class_node().items() if k!="source_location"},
+  )
+  for node in bad:
+   with self.subTest(keys=sorted(node)):
+    with self.assertRaises(normalize.GraphOutputError):normalize._node_kind(node)
+  with tempfile.TemporaryDirectory() as d:
+   r=Path(d);(r/"pkg").mkdir();snapshot,encoded,digest=normalize.normalize_graph(graph(),SHA,r);self.assertEqual([n["kind"] for n in snapshot["nodes"]],["class","function"]);self.assertEqual(hashlib.sha256(encoded).hexdigest(),digest)
+ def test_15i_d4_file_class_function_three_run_determinism(self):
+  g={"nodes":[d4_file_node(),d4_class_node(),d4_function_node()],"edges":[{"source":"pkg_a","target":"pkg_a_a","relation":"contains"},{"source":"pkg_a_a","target":"pkg_a_f","relation":"calls"}]}
+  with tempfile.TemporaryDirectory() as d:xs=[normalize.normalize_graph(g,SHA,Path(d)) for _ in range(3)]
+  self.assertEqual(xs[0],xs[1]);self.assertEqual(xs[1],xs[2]);self.assertEqual(hashlib.sha256(xs[0][1]).hexdigest(),xs[0][2]);self.assertEqual({n["qualified_name"]:n["kind"] for n in xs[0][0]["nodes"]},{"a.py":"file","A":"class","f()":"function"})
  def test_16_source_proof_exact_sha(self):
   with tempfile.TemporaryDirectory() as d:
    p=Path(d)/'p';p.write_text(json.dumps({"repository":"Dsamofalov/hwm_predictor","product_sha":"0"*40}))
