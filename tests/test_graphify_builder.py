@@ -8,6 +8,16 @@ def graph(): return {"nodes":[{"id":"b","type":"function","label":"pkg.beta","so
 def d4_class_node(): return {"_callable":True,"_callable_class":False,"_origin":"source","file_type":"code","id":"pkg_a_a","label":"A","source_file":"a.py","source_location":"L1"}
 def d4_function_node(): return {"_callable":False,"_origin":"source","file_type":"code","id":"pkg_a_f","label":"f()","source_file":"a.py","source_location":"L3"}
 def d4_file_node(): return {"id":"pkg_a","label":"a.py","file_type":"code","source_file":"a.py","source_location":"L1"}
+
+def d5_explicit_nodes(): return [{"id":"a","type":"class","label":"A","source_file":"a.py","source_location":"L1"},{"id":"b","type":"function","label":"b","source_file":"b.py","source_location":"L2"}]
+def d5_inventory(edges):
+ with tempfile.TemporaryDirectory() as d:
+  try:normalize.normalize_graph({"nodes":d5_explicit_nodes(),"edges":edges},SHA,Path(d))
+  except normalize.GraphOutputError as exc:
+   message=str(exc)
+   if not message.startswith("dangling edge endpoint inventory: "):raise AssertionError(message)
+   return message,json.loads(message.split(": ",1)[1])
+ raise AssertionError("dangling edge unexpectedly accepted")
 class T(unittest.TestCase):
  def test_01_exact_sha_and_three_run_determinism(self):
   with tempfile.TemporaryDirectory() as d:
@@ -169,6 +179,42 @@ class T(unittest.TestCase):
   g={"nodes":[d4_file_node(),d4_class_node(),d4_function_node()],"edges":[{"source":"pkg_a","target":"pkg_a_a","relation":"contains"},{"source":"pkg_a_a","target":"pkg_a_f","relation":"calls"}]}
   with tempfile.TemporaryDirectory() as d:xs=[normalize.normalize_graph(g,SHA,Path(d)) for _ in range(3)]
   self.assertEqual(xs[0],xs[1]);self.assertEqual(xs[1],xs[2]);self.assertEqual(hashlib.sha256(xs[0][1]).hexdigest(),xs[0][2]);self.assertEqual({n["qualified_name"]:n["kind"] for n in xs[0][0]["nodes"]},{"a.py":"file","A":"class","f()":"function"})
+ def test_15j_d5_dangling_inventory_complete_deterministic_and_endpoint_exact(self):
+  edges=[{"source":"a","target":"b","relation":"ok"},{"source":"missing-s","target":"b","relation":"calls"},{"source":"a","target":"missing-t","relation":"calls"},{"source":"missing-a","target":"missing-b","relation":"calls"},{"from":7.5,"to":"b","kind":"calls","weight":1}]
+  first,p=d5_inventory(edges);second,p2=d5_inventory([edges[4],edges[2],edges[0],edges[3],edges[1]]);self.assertEqual(first,second);self.assertEqual(p,p2)
+  self.assertEqual((p["raw_node_count"],p["usable_upstream_node_id_count"],p["stringified_raw_node_id_count"],p["raw_edge_count"]),(2,2,2,5));self.assertEqual((p["unresolved_edge_count"],p["unresolved_source_only"],p["unresolved_target_only"],p["unresolved_both"]),(4,2,1,1))
+  g=[g for g in p["groups"] if g["selected_source_key"]=="from"][0];self.assertEqual((g["selected_source_key"],g["selected_target_key"],g["selected_source_type"],g["selected_target_type"]),("from","to","number","string"));self.assertEqual(g["key_types"],{"from":"number","kind":"string","to":"string","weight":"number"});self.assertFalse(g["source_in_raw_node_ids"]);self.assertFalse(g["source_in_upstream_to_hwm"]);self.assertTrue(g["target_in_raw_node_ids"]);self.assertTrue(g["target_in_upstream_to_hwm"]);self.assertEqual(g["edge_discriminators"],{"relation":{"present":False,"type":"missing"},"type":{"present":False,"type":"missing"},"kind":{"present":True,"type":"string"}})
+ def test_15k_d5_raw_id_mapping_distinction_collision_and_fail_closed(self):
+  p=normalize._dangling_edge_inventory([{"source":"ghost","target":"b","relation":"calls"}],raw_node_count=2,raw_node_ids={"ghost","b"},upstream_to_hwm={"b":"hwm-b"});g=p["groups"][0];self.assertTrue(g["source_in_raw_node_ids"]);self.assertFalse(g["source_in_upstream_to_hwm"]);self.assertTrue(g["target_in_raw_node_ids"]);self.assertTrue(g["target_in_upstream_to_hwm"])
+  nodes=[{"id":1,"type":"class","label":"A","source_file":"a.py","source_location":"L1"},{"id":"1","type":"class","label":"B","source_file":"b.py","source_location":"L2"}]
+  with tempfile.TemporaryDirectory() as d:
+   with self.assertRaisesRegex(normalize.GraphOutputError,"raw node id stringification collision inventory") as cm:normalize.normalize_graph({"nodes":nodes,"edges":[]},SHA,Path(d))
+  q=json.loads(str(cm.exception).split(": ",1)[1]);self.assertEqual((q["raw_node_count"],q["stringified_raw_node_id_count"],q["collision_group_count"],q["collision_node_count"]),(2,1,1,2));self.assertEqual(q["groups"][0]["representative_variants"],2)
+ def test_15l_d5_diagnostic_bounds_representatives_sanitization_and_privacy(self):
+  _,p=d5_inventory([{"source":f"missing-{i}","target":"b","relation":"calls"} for i in range(6)]);g=p["groups"][0];self.assertEqual((g["count"],g["representative_variants"],len(g["representatives"])),(6,6,3))
+  msg,_=d5_inventory([{"source":"missing\nid","target":"b","relation":"calls"}]);self.assertIn("missing?id",msg);self.assertNotIn("missing\\nid",msg)
+  _,q=d5_inventory([{"source":"X"*200,"target":"b","relation":"calls"}]);s=q["groups"][0]["representatives"][0]["source"]["stringified"];self.assertLessEqual(len(s),64);self.assertIn("~",s)
+  msg,_=d5_inventory([{"source":"/host/private/SECRET_TOKEN_value","target":"b","relation":"calls"}]);self.assertNotIn("/host/private",msg);self.assertNotIn("SECRET_TOKEN",msg);self.assertIn("redacted-absolute-path~",msg)
+  edges=[{"source":f"m{i}","target":"b","relation":"calls",f"extra_{i}":"x"} for i in range(40)]
+  with tempfile.TemporaryDirectory() as d:
+   with self.assertRaises(normalize.GraphOutputError) as cm:normalize.normalize_graph({"nodes":d5_explicit_nodes(),"edges":edges},SHA,Path(d))
+  self.assertEqual(str(cm.exception),"dangling edge endpoint inventory exceeds bounded detail capacity");self.assertLess(len(str(cm.exception)),100)
+ def test_15m_d5_valid_edge_identity_kind_precedence_and_malformed_semantics_unchanged(self):
+  with tempfile.TemporaryDirectory() as d:
+   r=Path(d);(r/"pkg").mkdir();out=normalize.normalize_graph(graph(),SHA,r);self.assertEqual(hashlib.sha256(out[1]).hexdigest(),"369094bf66a5d0d87640cf33983bf9033505fc684565a58f63f91ce6e95e733f")
+  g={"nodes":[d4_file_node(),d4_class_node(),d4_function_node()],"edges":[{"source":"pkg_a","target":"pkg_a_a","relation":"contains"},{"source":"pkg_a_a","target":"pkg_a_f","relation":"calls"}]}
+  with tempfile.TemporaryDirectory() as d:out=normalize.normalize_graph(g,SHA,Path(d));self.assertEqual(hashlib.sha256(out[1]).hexdigest(),"529a750769ffc6dbcfaabe743266b8d47cd4916d5470a1985a598680b15256e3")
+  for edge,expected in (({"source":"a","target":"b","relation":"r","type":"t","kind":"k"},"r"),({"source":"a","target":"b","type":"t","kind":"k"},"t"),({"source":"a","target":"b","kind":"k"},"k")):
+   with tempfile.TemporaryDirectory() as d:s=normalize.normalize_graph({"nodes":d5_explicit_nodes(),"edges":[edge]},SHA,Path(d))[0];self.assertEqual(s["edges"][0]["kind"],expected)
+  for edges,message in (([1],"Graphify edge is not an object"),([{"source":"a","relation":"calls"}],"Graphify edge endpoint missing"),([{"source":"a","target":"b","relation":{}}],"edge kind must be text")):
+   with self.subTest(message=message),tempfile.TemporaryDirectory() as d:
+    with self.assertRaisesRegex(normalize.GraphOutputError,message):normalize.normalize_graph({"nodes":d5_explicit_nodes(),"edges":edges},SHA,Path(d))
+ def test_15n_d5_node_contract_unchanged_and_no_dangling_edge_is_accepted(self):
+  self.assertEqual((normalize._node_kind(d4_file_node()),normalize._node_kind(d4_class_node()),normalize._node_kind(d4_function_node())),("file","class","function"))
+  n=d4_class_node();n.update({"type":"module","kind":"function","node_type":"class"});self.assertEqual(normalize._node_kind(n),"module")
+  for edges in ([{"source":"missing","target":"b","relation":"calls"}],[{"source":"a","target":"missing","relation":"calls"}],[{"source":"missing-a","target":"missing-b","relation":"calls"}]):
+   with tempfile.TemporaryDirectory() as d:
+    with self.assertRaisesRegex(normalize.GraphOutputError,"dangling edge endpoint inventory"):normalize.normalize_graph({"nodes":d5_explicit_nodes(),"edges":edges},SHA,Path(d))
  def test_16_source_proof_exact_sha(self):
   with tempfile.TemporaryDirectory() as d:
    p=Path(d)/'p';p.write_text(json.dumps({"repository":"Dsamofalov/hwm_predictor","product_sha":"0"*40}))

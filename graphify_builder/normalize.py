@@ -91,6 +91,193 @@ _DIAGNOSTIC_REPRESENTATIVE_LIMIT = 3
 _DIAGNOSTIC_DETAIL_LIMIT = 4000
 
 
+_EDGE_DIAGNOSTIC_REPRESENTATIVE_LIMIT = 3
+_EDGE_DIAGNOSTIC_DETAIL_LIMIT = 4000
+_EDGE_DISCRIMINATOR_FIELDS = ("relation", "type", "kind")
+_SENSITIVE_DIAGNOSTIC_TEXT = re.compile(
+    r"(?i)(?:secret|token|password|credential|authorization|bearer|api[_-]?key)"
+)
+
+
+def _edge_diagnostic_text(value: str) -> str:
+    value = unicodedata.normalize("NFC", value)
+    value = "".join(ch if ch >= " " and ch != "\x7f" else "?" for ch in value)
+    digest = hashlib.sha256(value.encode("utf-8")).hexdigest()[:12]
+    normalized_path = value.replace("\\", "/")
+    if normalized_path.startswith("/") or re.match(r"^[A-Za-z]:/", normalized_path):
+        return "redacted-absolute-path~" + digest
+    if _SENSITIVE_DIAGNOSTIC_TEXT.search(value):
+        return "redacted-sensitive~" + digest
+    if len(value) <= _DIAGNOSTIC_VALUE_LIMIT:
+        return value
+    keep = _DIAGNOSTIC_VALUE_LIMIT - len(digest) - 2
+    return value[:keep] + "~" + digest
+
+
+def _edge_endpoint_representative(value: object, *, raw_node_ids: set[str],
+                                  upstream_to_hwm: dict[str, str]) -> dict:
+    stringified = str(value)
+    return {
+        "type": _json_value_type(value),
+        "stringified": _edge_diagnostic_text(stringified),
+        "in_raw_node_ids": stringified in raw_node_ids,
+        "in_upstream_to_hwm": stringified in upstream_to_hwm,
+    }
+
+
+def _edge_discriminator_shape(edge: dict) -> dict:
+    return {
+        field: (
+            {"present": True, "type": _json_value_type(edge[field])}
+            if field in edge else {"present": False, "type": "missing"}
+        )
+        for field in _EDGE_DISCRIMINATOR_FIELDS
+    }
+
+
+def _selected_edge_endpoint(edge: dict, primary: str, fallback: str) -> tuple[str, object]:
+    key = primary if primary in edge else fallback
+    return key, edge.get(primary, edge.get(fallback))
+
+
+def _raw_node_id_index(nodes: list) -> set[str]:
+    groups: dict[str, dict] = {}
+    for node in nodes:
+        raw_id = node["id"]
+        stringified = str(raw_id)
+        representative = {
+            "type": _json_value_type(raw_id),
+            "stringified": _edge_diagnostic_text(stringified),
+        }
+        representative_key = canonical_json(representative).decode("utf-8")
+        group = groups.setdefault(stringified, {"count": 0, "representatives": {}})
+        group["count"] += 1
+        group["representatives"][representative_key] = representative
+    collisions = []
+    for stringified in sorted(groups):
+        group = groups[stringified]
+        if group["count"] <= 1:
+            continue
+        representative_keys = sorted(group["representatives"])
+        collisions.append({
+            "count": group["count"],
+            "representative_variants": len(representative_keys),
+            "representatives": [
+                group["representatives"][key]
+                for key in representative_keys[:_EDGE_DIAGNOSTIC_REPRESENTATIVE_LIMIT]
+            ],
+        })
+    if collisions:
+        summary = {
+            "raw_node_count": len(nodes),
+            "stringified_raw_node_id_count": len(groups),
+            "collision_group_count": len(collisions),
+            "collision_node_count": sum(group["count"] for group in collisions),
+            "groups": collisions,
+        }
+        detail = "raw node id stringification collision inventory: " + canonical_json(summary).decode("utf-8")
+        if len(detail) > _EDGE_DIAGNOSTIC_DETAIL_LIMIT:
+            raise GraphOutputError("raw node id stringification collision inventory exceeds bounded detail capacity")
+        raise GraphOutputError(detail)
+    return set(groups)
+
+
+def _dangling_edge_inventory(edges: list, *, raw_node_count: int,
+                             raw_node_ids: set[str],
+                             upstream_to_hwm: dict[str, str]) -> dict:
+    groups: dict[str, dict] = {}
+    source_only = target_only = both = unresolved_total = 0
+    for edge in edges:
+        if not isinstance(edge, dict):
+            continue
+        source_key, source = _selected_edge_endpoint(edge, "source", "from")
+        target_key, target = _selected_edge_endpoint(edge, "target", "to")
+        if source is None or target is None:
+            continue
+        source_text, target_text = str(source), str(target)
+        source_resolved = source_text in upstream_to_hwm
+        target_resolved = target_text in upstream_to_hwm
+        if source_resolved and target_resolved:
+            continue
+        unresolved_total += 1
+        if not source_resolved and not target_resolved:
+            both += 1
+        elif not source_resolved:
+            source_only += 1
+        else:
+            target_only += 1
+        keys = sorted(edge)
+        signature = {
+            "keys": keys,
+            "key_types": {key: _json_value_type(edge[key]) for key in keys},
+            "selected_source_key": source_key,
+            "selected_target_key": target_key,
+            "selected_source_type": _json_value_type(source),
+            "selected_target_type": _json_value_type(target),
+            "source_in_raw_node_ids": source_text in raw_node_ids,
+            "target_in_raw_node_ids": target_text in raw_node_ids,
+            "source_in_upstream_to_hwm": source_resolved,
+            "target_in_upstream_to_hwm": target_resolved,
+            "edge_discriminators": _edge_discriminator_shape(edge),
+        }
+        signature_key = canonical_json(signature).decode("utf-8")
+        representative = {
+            "source": _edge_endpoint_representative(
+                source, raw_node_ids=raw_node_ids, upstream_to_hwm=upstream_to_hwm
+            ),
+            "target": _edge_endpoint_representative(
+                target, raw_node_ids=raw_node_ids, upstream_to_hwm=upstream_to_hwm
+            ),
+        }
+        representative_key = canonical_json(representative).decode("utf-8")
+        group = groups.setdefault(signature_key, {
+            "signature": signature,
+            "count": 0,
+            "representatives": {},
+        })
+        group["count"] += 1
+        group["representatives"][representative_key] = representative
+    summary_groups = []
+    for signature_key in sorted(groups):
+        group = groups[signature_key]
+        representative_keys = sorted(group["representatives"])
+        summary_groups.append({
+            **group["signature"],
+            "count": group["count"],
+            "representative_variants": len(representative_keys),
+            "representatives": [
+                group["representatives"][key]
+                for key in representative_keys[:_EDGE_DIAGNOSTIC_REPRESENTATIVE_LIMIT]
+            ],
+        })
+    return {
+        "raw_node_count": raw_node_count,
+        "usable_upstream_node_id_count": len(upstream_to_hwm),
+        "stringified_raw_node_id_count": len(raw_node_ids),
+        "raw_edge_count": len(edges),
+        "unresolved_edge_count": unresolved_total,
+        "unresolved_source_only": source_only,
+        "unresolved_target_only": target_only,
+        "unresolved_both": both,
+        "groups": summary_groups,
+    }
+
+
+def _raise_dangling_edge_inventory(edges: list, *, raw_node_count: int,
+                                   raw_node_ids: set[str],
+                                   upstream_to_hwm: dict[str, str]) -> None:
+    summary = _dangling_edge_inventory(
+        edges,
+        raw_node_count=raw_node_count,
+        raw_node_ids=raw_node_ids,
+        upstream_to_hwm=upstream_to_hwm,
+    )
+    detail = "dangling edge endpoint inventory: " + canonical_json(summary).decode("utf-8")
+    if len(detail) > _EDGE_DIAGNOSTIC_DETAIL_LIMIT:
+        raise GraphOutputError("dangling edge endpoint inventory exceeds bounded detail capacity")
+    raise GraphOutputError(detail)
+
+
 def _json_value_type(value: object) -> str:
     if value is None:
         return "null"
@@ -322,6 +509,7 @@ def normalize_graph(graph: object, product_sha: str, product_root: Path) -> tupl
     if not isinstance(graph, dict) or not isinstance(graph.get("nodes"), list) or not isinstance(graph.get("edges"), list):
         raise GraphOutputError("Graphify graph.json must contain node and edge arrays")
     _preflight_missing_node_discriminators(graph["nodes"])
+    raw_node_ids = _raw_node_id_index(graph["nodes"])
     upstream_to_hwm: dict[str, str] = {}
     nodes_by_id: dict[str, dict] = {}
     for upstream in graph["nodes"]:
@@ -356,7 +544,12 @@ def normalize_graph(graph: object, product_sha: str, product_root: Path) -> tupl
             raise GraphOutputError("Graphify edge endpoint missing")
         src_id, dst_id = upstream_to_hwm.get(str(src)), upstream_to_hwm.get(str(dst))
         if src_id is None or dst_id is None:
-            raise GraphOutputError("Graphify edge references missing structural node")
+            _raise_dangling_edge_inventory(
+                graph["edges"],
+                raw_node_count=len(graph["nodes"]),
+                raw_node_ids=raw_node_ids,
+                upstream_to_hwm=upstream_to_hwm,
+            )
         kind = _text(upstream.get("relation", upstream.get("type", upstream.get("kind"))),
                      field="edge kind", max_len=64, nonempty=True)
         ident = edge_id(src_id, dst_id, kind)
