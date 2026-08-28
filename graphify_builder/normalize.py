@@ -86,6 +86,16 @@ def _lines(node: dict) -> tuple[int, int]:
 
 
 def _node_kind(node: dict) -> str:
+    if not any(key in node for key in ("type", "kind", "node_type")):
+        source_file = node.get("source_file")
+        label = node.get("label")
+        if (
+            node.get("file_type") == "code"
+            and isinstance(source_file, str) and source_file
+            and isinstance(label, str) and label
+            and Path(source_file).name == label
+        ):
+            return "file"
     value = node.get("type", node.get("kind", node.get("node_type")))
     return _text(value, field="node kind", max_len=64, nonempty=True)
 

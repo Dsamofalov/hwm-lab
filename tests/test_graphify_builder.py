@@ -74,6 +74,15 @@ class T(unittest.TestCase):
   with tempfile.TemporaryDirectory() as d:
    for bad in ({},{"nodes":[],"edges":"x"},{"nodes":[{"id":"x"}],"edges":[]}):
     with self.assertRaises(normalize.GraphOutputError):normalize.normalize_graph(bad,SHA,Path(d))
+ def test_15a_pinned_graphify_file_node_kind_compatibility(self):
+  with tempfile.TemporaryDirectory() as d:
+   r=Path(d);(r/"pkg").mkdir();node={"id":"pkg_a","label":"a.py","file_type":"code","source_file":"pkg/a.py","source_location":"L1"};g={"nodes":[node],"edges":[]};xs=[normalize.normalize_graph(g,SHA,r) for _ in range(3)]
+   self.assertEqual(xs[0],xs[1]);self.assertEqual(xs[1],xs[2]);self.assertEqual((xs[0][0]["nodes"][0]["kind"],xs[0][0]["nodes"][0]["path"],xs[0][0]["nodes"][0]["qualified_name"]),("file","pkg/a.py","a.py"));self.assertEqual(hashlib.sha256(xs[0][1]).hexdigest(),xs[0][2])
+   for fields,expected in (({"type":"class"},"class"),({"kind":"function"},"function"),({"node_type":"module"},"module"),({"type":"class","kind":"function","node_type":"module"},"class")):
+    n=dict(node);n.update(fields);self.assertEqual(normalize._node_kind(n),expected)
+   for bad in ({**node,"label":"not-a.py"},{**node,"file_type":"document"},{**node,"type":{}},{**node,"type":[]},{**node,"type":None}):
+    with self.subTest(bad=bad):
+     with self.assertRaisesRegex(normalize.GraphOutputError,"node kind must be text"):normalize._node_kind(bad)
  def test_16_source_proof_exact_sha(self):
   with tempfile.TemporaryDirectory() as d:
    p=Path(d)/'p';p.write_text(json.dumps({"repository":"Dsamofalov/hwm_predictor","product_sha":"0"*40}))
