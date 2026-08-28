@@ -83,6 +83,33 @@ class T(unittest.TestCase):
    for bad in ({**node,"label":"not-a.py"},{**node,"file_type":"document"},{**node,"type":{}},{**node,"type":[]},{**node,"type":None}):
     with self.subTest(bad=bad):
      with self.assertRaisesRegex(normalize.GraphOutputError,"node kind must be text"):normalize._node_kind(bad)
+ def test_15b_missing_discriminator_inventory_complete_deterministic_bounded(self):
+  secret_dir='/host/private/'+'D'*200;source_file=secret_dir+'/'+('P'*200+'.py');long_id='I'*300;long_label='L'*300
+  explicit=[{"id":"type-node","type":"class","label":"ExplicitType","file_type":"code","source_file":"pkg/e.py","source_location":"L2-L5"},{"id":"kind-node","kind":"function","label":"ExplicitKind","file_type":"code","source_file":"pkg/k.py","source_location":"L3-L6"},{"id":"node-type-node","node_type":"module","label":"ExplicitNodeType","file_type":"code","source_file":"pkg/n.py","source_location":"L1"}]
+  file_node={"id":"file-node","label":"a.py","file_type":"code","source_file":"pkg/a.py","source_location":"L1"}
+  unresolved=[{"id":long_id,"label":long_label,"file_type":"code","source_file":source_file,"source_location":"L2-L5"},{"id":"fn","label":"beta","file_type":"code","source_file":"pkg/a.py","source_location":"L8-L10"},{"id":"scoped","label":"gamma","file_type":"code","source_file":"pkg/a.py","source_location":"L9","symbol_scope":["local"]},{"id":"minimal","label":"delta","source_file":"pkg/a.py","source_location":None}]
+  def inventory(nodes):
+   with self.assertRaisesRegex(normalize.GraphOutputError,'missing node discriminator inventory') as cm:normalize.normalize_graph({"nodes":nodes,"edges":[]},SHA,Path('/tmp/not-used'))
+   message=str(cm.exception);return message,json.loads(message.split(': ',1)[1])
+  first,payload=inventory([*explicit,file_node,*unresolved]);second,payload2=inventory([*reversed(unresolved),file_node,*reversed(explicit)])
+  self.assertEqual(first,second);self.assertEqual(payload,payload2);self.assertLess(len(first),4096);self.assertEqual(payload['total'],4);self.assertEqual([g['count'] for g in payload['groups']],[1,2,1]);self.assertEqual([g['keys'] for g in payload['groups']],[['file_type','id','label','source_file','source_location','symbol_scope'],['file_type','id','label','source_file','source_location'],['id','label','source_file','source_location']])
+  self.assertEqual(payload['groups'][0]['key_types']['symbol_scope'],'array');self.assertEqual(payload['groups'][1]['key_types'],{'file_type':'string','id':'string','label':'string','source_file':'string','source_location':'string'});self.assertEqual(payload['groups'][2]['key_types']['source_location'],'null');self.assertFalse(payload['groups'][2]['representatives'][0]['file_type']['present']);self.assertEqual(payload['groups'][2]['representatives'][0]['file_type']['type'],'missing')
+  for group in payload['groups']:
+   for rep in group['representatives']:
+    self.assertEqual(set(rep),{'id','label','source_file','source_location','file_type'})
+    for field in ('id','label','source_file','source_location','file_type'):
+     self.assertIn('present',rep[field]);self.assertIn('type',rep[field])
+     if isinstance(rep[field].get('value'),str):self.assertLessEqual(len(rep[field]['value']),64)
+  self.assertNotIn(secret_dir,first);self.assertNotIn(source_file,first);self.assertNotIn(long_id,first);self.assertNotIn(long_label,first)
+  for excluded in ('type-node','kind-node','node-type-node','file-node'):self.assertNotIn(excluded,first)
+ def test_15c_missing_discriminator_preflight_rejects_malformed_and_preserves_success(self):
+  for bad,message in (({"nodes":[1],"edges":[]},'Graphify node is not an object'),({"nodes":[{"id":"x",1:"bad"}],"edges":[]},'Graphify node key must be text'),({"nodes":[{"label":"x"}],"edges":[]},'Graphify node id is unusable')):
+   with self.subTest(message=message):
+    with self.assertRaisesRegex(normalize.GraphOutputError,message):normalize.normalize_graph(bad,SHA,Path('/tmp/not-used'))
+  malformed={"id":"x","label":"x.py","file_type":"code","source_file":"x.py","source_location":"L1","type":{}}
+  with self.assertRaisesRegex(normalize.GraphOutputError,'node kind must be text'):normalize.normalize_graph({"nodes":[malformed],"edges":[]},SHA,Path('/tmp/not-used'))
+  with tempfile.TemporaryDirectory() as d:
+   r=Path(d);(r/'pkg').mkdir();snapshot,encoded,digest=normalize.normalize_graph(graph(),SHA,r);self.assertEqual([n['kind'] for n in snapshot['nodes']],['class','function']);self.assertEqual(hashlib.sha256(encoded).hexdigest(),digest)
  def test_16_source_proof_exact_sha(self):
   with tempfile.TemporaryDirectory() as d:
    p=Path(d)/'p';p.write_text(json.dumps({"repository":"Dsamofalov/hwm_predictor","product_sha":"0"*40}))

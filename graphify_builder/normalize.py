@@ -85,6 +85,149 @@ def _lines(node: dict) -> tuple[int, int]:
     raise GraphOutputError("node lacks deterministic source line range")
 
 
+_DIAGNOSTIC_FIELDS = ("id", "label", "source_file", "source_location", "file_type")
+_DIAGNOSTIC_VALUE_LIMIT = 64
+_DIAGNOSTIC_REPRESENTATIVE_LIMIT = 3
+_DIAGNOSTIC_DETAIL_LIMIT = 4000
+
+
+def _json_value_type(value: object) -> str:
+    if value is None:
+        return "null"
+    if isinstance(value, bool):
+        return "boolean"
+    if isinstance(value, str):
+        return "string"
+    if isinstance(value, (int, float)):
+        return "number"
+    if isinstance(value, list):
+        return "array"
+    if isinstance(value, dict):
+        return "object"
+    raise GraphOutputError("Graphify node contains non-JSON value")
+
+
+def _bounded_diagnostic_text(value: str, *, path: bool = False) -> str:
+    value = unicodedata.normalize("NFC", value)
+    value = "".join(ch if ch >= " " and ch != "\x7f" else "?" for ch in value)
+    if path:
+        value = value.replace("\\", "/").rsplit("/", 1)[-1]
+    if len(value) <= _DIAGNOSTIC_VALUE_LIMIT:
+        return value
+    digest = hashlib.sha256(value.encode("utf-8")).hexdigest()[:12]
+    keep = _DIAGNOSTIC_VALUE_LIMIT - len(digest) - 2
+    return value[:keep] + "~" + digest
+
+
+def _diagnostic_field(node: dict, field: str) -> dict:
+    if field not in node:
+        return {"present": False, "type": "missing"}
+    value = node[field]
+    result = {"present": True, "type": _json_value_type(value)}
+    if isinstance(value, str):
+        result["value"] = _bounded_diagnostic_text(value, path=field == "source_file")
+    elif value is None or isinstance(value, (bool, int, float)):
+        result["value"] = value
+    return result
+
+
+def _source_location_shape(value: object) -> str:
+    if not isinstance(value, str):
+        return _json_value_type(value)
+    value = value.strip()
+    if re.fullmatch(r"L\d+", value):
+        return "line"
+    if re.fullmatch(r"L\d+-L?\d+", value):
+        return "line-range"
+    return "text"
+
+
+def _missing_discriminator_signature(node: dict) -> dict:
+    keys = sorted(node)
+    source_file = node.get("source_file")
+    label = node.get("label")
+    return {
+        "keys": keys,
+        "key_types": {key: _json_value_type(node[key]) for key in keys},
+        "label_matches_source_basename": bool(
+            isinstance(source_file, str)
+            and source_file
+            and isinstance(label, str)
+            and label
+            and Path(source_file).name == label
+        ),
+        "source_location_shape": (
+            _source_location_shape(node["source_location"])
+            if "source_location" in node else "missing"
+        ),
+    }
+
+
+def _is_d2_file_node(node: dict) -> bool:
+    source_file = node.get("source_file")
+    label = node.get("label")
+    return (
+        node.get("file_type") == "code"
+        and isinstance(source_file, str) and source_file
+        and isinstance(label, str) and label
+        and Path(source_file).name == label
+    )
+
+
+def _preflight_missing_node_discriminators(nodes: list) -> None:
+    groups: dict[str, dict] = {}
+    for node in nodes:
+        if not isinstance(node, dict):
+            raise GraphOutputError("Graphify node is not an object")
+        if not all(isinstance(key, str) for key in node):
+            raise GraphOutputError("Graphify node key must be text")
+        for key, value in node.items():
+            if len(key) > 128:
+                raise GraphOutputError("Graphify node key is too long")
+            _json_value_type(value)
+        upstream_id = node.get("id")
+        if not isinstance(upstream_id, (str, int, float)) or isinstance(upstream_id, bool):
+            raise GraphOutputError("Graphify node id is unusable")
+        if any(key in node for key in ("type", "kind", "node_type")):
+            continue
+        if _is_d2_file_node(node):
+            continue
+        signature = _missing_discriminator_signature(node)
+        signature_key = canonical_json(signature).decode("utf-8")
+        representative = {field: _diagnostic_field(node, field) for field in _DIAGNOSTIC_FIELDS}
+        representative_key = canonical_json(representative).decode("utf-8")
+        group = groups.setdefault(signature_key, {
+            "signature": signature,
+            "count": 0,
+            "representatives": {},
+        })
+        group["count"] += 1
+        group["representatives"][representative_key] = representative
+    if not groups:
+        return
+    summary_groups = []
+    for signature_key in sorted(groups):
+        group = groups[signature_key]
+        representative_keys = sorted(group["representatives"])
+        summary_groups.append({
+            **group["signature"],
+            "count": group["count"],
+            "representative_variants": len(representative_keys),
+            "representatives": [
+                group["representatives"][key]
+                for key in representative_keys[:_DIAGNOSTIC_REPRESENTATIVE_LIMIT]
+            ],
+        })
+    summary = {
+        "groups": summary_groups,
+        "total": sum(group["count"] for group in groups.values()),
+    }
+    detail = "missing node discriminator inventory: " + canonical_json(summary).decode("utf-8")
+    if len(detail) > _DIAGNOSTIC_DETAIL_LIMIT:
+        raise GraphOutputError("missing node discriminator inventory exceeds bounded detail capacity")
+    raise GraphOutputError(detail)
+
+
 def _node_kind(node: dict) -> str:
     if not any(key in node for key in ("type", "kind", "node_type")):
         source_file = node.get("source_file")
@@ -119,6 +262,7 @@ def normalize_graph(graph: object, product_sha: str, product_root: Path) -> tupl
         raise GraphOutputError("requested product SHA must be exact 40-hex")
     if not isinstance(graph, dict) or not isinstance(graph.get("nodes"), list) or not isinstance(graph.get("edges"), list):
         raise GraphOutputError("Graphify graph.json must contain node and edge arrays")
+    _preflight_missing_node_discriminators(graph["nodes"])
     upstream_to_hwm: dict[str, str] = {}
     nodes_by_id: dict[str, dict] = {}
     for upstream in graph["nodes"]:
