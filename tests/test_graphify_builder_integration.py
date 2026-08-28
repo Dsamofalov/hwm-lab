@@ -12,6 +12,8 @@ TRIPWIRE=Path("/tmp/hwm-i10-0073-product-executed")
 UPSTREAM_RAW=f"https://raw.githubusercontent.com/Graphify-Labs/graphify/{policy.UPSTREAM_COMMIT}/"
 CONTROL_RAW="https://raw.githubusercontent.com/Dsamofalov/hwm-control/8a5b6347e562a1312207ab3fbcea9cede51a2f23/schemas/"
 SCHEMAS={"snapshot":("graph-snapshot.v1.schema.json",policy.SNAPSHOT_SCHEMA_BLOB_SHA),"metadata":("graph-metadata.v1.schema.json",policy.METADATA_SCHEMA_BLOB_SHA),"health":("graph-health.v1.schema.json",policy.HEALTH_SCHEMA_BLOB_SHA)}
+HEALTH_DETAIL_MAX=4096
+HEALTH_DIAGNOSTIC_READ_MAX=8192
 
 def _env(extra=None):
  e={"PATH":"/usr/bin:/bin","HOME":"/nonexistent","GIT_CONFIG_NOSYSTEM":"1","GIT_CONFIG_GLOBAL":"/dev/null","GIT_TERMINAL_PROMPT":"0","GIT_OPTIONAL_LOCKS":"0","GIT_LFS_SKIP_SMUDGE":"1","LC_ALL":"C","LANG":"C"}
@@ -58,6 +60,35 @@ def _authority(base):
  return w,m
 def _schemas():
  return {k:json.loads(_fetch(CONTROL_RAW+n,b)) for k,(n,b) in SCHEMAS.items()}
+def _health_text(value,limit):
+ if not isinstance(value,str):raise ValueError("health diagnostic field is not text")
+ return value[:limit]
+def _health_diagnostic(out):
+ path=out/"health.json"
+ try:
+  if not stat.S_ISREG(path.lstat().st_mode):return "health_diagnostic=malformed"
+  with path.open("rb") as handle:raw=handle.read(HEALTH_DIAGNOSTIC_READ_MAX+1)
+ except FileNotFoundError:return "health_diagnostic=missing"
+ except OSError:return "health_diagnostic=unreadable"
+ if len(raw)>HEALTH_DIAGNOSTIC_READ_MAX:return f"health_diagnostic=oversized_or_unbounded limit={HEALTH_DIAGNOSTIC_READ_MAX}"
+ try:
+  obj=json.loads(raw.decode("utf-8"))
+  if not isinstance(obj,dict):raise ValueError("health diagnostic root is not an object")
+  safe={"schema":_health_text(obj["schema"],128),"state":_health_text(obj["state"],128),"reason_code":_health_text(obj["reason_code"],256),"detail":_health_text(obj.get("detail",""),HEALTH_DETAIL_MAX)}
+ except (KeyError,TypeError,ValueError,UnicodeDecodeError,json.JSONDecodeError):return "health_diagnostic=malformed"
+ return "health_diagnostic="+json.dumps(safe,ensure_ascii=True,sort_keys=True,separators=(",",":"))
+
+class HealthDiagnosticTests(unittest.TestCase):
+ def test_failure_health_diagnostic_is_bounded_and_explicit(self):
+  with tempfile.TemporaryDirectory() as d:
+   out=Path(d);hidden="SHOULD-NOT-EMIT"
+   health={"schema":"hwm-graph-health/v1","state":"incompatible_upstream_output","reason_code":"malformed_or_incompatible_graphify_output","detail":"Graphify internal failure","requested_product_sha":hidden,"credential":hidden}
+   (out/"health.json").write_text(json.dumps(health),encoding="utf-8");diag=_health_diagnostic(out)
+   self.assertEqual(diag,'health_diagnostic={"detail":"Graphify internal failure","reason_code":"malformed_or_incompatible_graphify_output","schema":"hwm-graph-health/v1","state":"incompatible_upstream_output"}');self.assertNotIn(hidden,diag)
+   (out/"health.json").unlink();self.assertEqual(_health_diagnostic(out),"health_diagnostic=missing")
+   (out/"health.json").write_bytes(b"{not-json");self.assertEqual(_health_diagnostic(out),"health_diagnostic=malformed")
+   tail="TAIL-SHOULD-NOT-EMIT";health["detail"]="d"*HEALTH_DETAIL_MAX+tail;(out/"health.json").write_text(json.dumps(health),encoding="utf-8");diag=_health_diagnostic(out);self.assertNotIn(tail,diag);self.assertEqual(len(json.loads(diag.split("=",1)[1])["detail"]),HEALTH_DETAIL_MAX)
+   secret="UNBOUNDED-SHOULD-NOT-EMIT";health["detail"]=secret+"z"*(HEALTH_DIAGNOSTIC_READ_MAX+100);(out/"health.json").write_text(json.dumps(health),encoding="utf-8");diag=_health_diagnostic(out);self.assertEqual(diag,f"health_diagnostic=oversized_or_unbounded limit={HEALTH_DIAGNOSTIC_READ_MAX}");self.assertNotIn(secret,diag)
 
 class ExactCheckoutBindingTests(unittest.TestCase):
  def test_binding_and_runtime_bridge_fail_closed(self):
@@ -71,14 +102,14 @@ class ExactCheckoutBindingTests(unittest.TestCase):
    attached=b/"attached";asha=_fixture(attached,detach=False)
    with self.assertRaisesRegex(runtime.BoundaryError,"detached"):runtime.verify_git_checkout(attached,asha)
   rs=(ROOT/"graphify_builder/runtime.py").read_text();sh=(ROOT/"graphify_builder/run_github_hosted.sh").read_text()
-  self.assertEqual(runtime.TRUSTED_GIT,Path("/usr/bin/git"));self.assertIn('"core.hooksPath=/dev/null"',rs);self.assertIn("shell=False",rs);self.assertNotIn("shell=True",rs)
+  self.assertEqual(runtime.TRUSTED_GIT,Path("/usr/bin/git"));self.assertIn('\"core.hooksPath=/dev/null\"',rs);self.assertIn("shell=False",rs);self.assertNotIn("shell=True",rs)
   self.assertIn("ExactRuntimeSession",sh);self.assertNotIn("/opt/hostedtoolcache",sh);self.assertNotIn("actions/setup-python",sh)
 
 class RealGraphifyIntegrationTests(unittest.TestCase):
  def _run(self,executor,python,product,sha,proof,wheelhouse_root,out):
   cmd=["/usr/bin/env","PATH=/usr/bin:/bin",f"PYTHONPATH={ROOT}","PYTHONSAFEPATH=1","PYTHONNOUSERSITE=1","PYTHONDONTWRITEBYTECODE=1","GITHUB_ACTIONS=true","RUNNER_OS=Linux","RUNNER_ARCH=X64",f"RUNNER_TEMP={os.environ['RUNNER_TEMP']}",f"GITHUB_RUN_ID={os.environ.get('GITHUB_RUN_ID','')}",str(python),"-m","graphify_builder.run","--product-root",str(product),"--product-sha",sha,"--source-proof",str(proof),"--wheelhouse",str(wheelhouse_root),"--output",str(out)]
   try:return executor.run("product_parsing",cmd,timeout=policy.BUILDER_TIMEOUT_SECONDS+60)
-  except subprocess.CalledProcessError as e:self.fail(f"Graphify rc={e.returncode}; stdout={(e.stdout or '')[-2500:]}; stderr={(e.stderr or '')[-3500:]}")
+  except subprocess.CalledProcessError as e:self.fail(f"Graphify rc={e.returncode}; {_health_diagnostic(out)}; stdout={(e.stdout or '')[-2500:]}; stderr={(e.stderr or '')[-3500:]}")
  def _check(self,out,sha,schemas):
   raw=(out/"snapshot.json").read_bytes();snap=json.loads(raw);meta=json.loads((out/"metadata.json").read_text());health=json.loads((out/"health.json").read_text())
   jsonschema.Draft202012Validator(schemas["snapshot"]).validate(snap);jsonschema.Draft202012Validator(schemas["metadata"],format_checker=jsonschema.FormatChecker()).validate(meta);jsonschema.Draft202012Validator(schemas["health"]).validate(health)
