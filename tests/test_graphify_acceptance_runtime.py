@@ -410,6 +410,15 @@ class LiveExactRuntimeV2Acceptance(unittest.TestCase):
                 "canonical_inventory_bytes": provenance.canonical_inventory_bytes,
                 "inventory_counts": provenance.inventory_counts,
                 "symlink_count": len(provenance.symlinks),
+                "symlinks": [
+                    {
+                        "path": path,
+                        "linkname": linkname,
+                        "terminal_target": terminal_target,
+                        "terminal_containment_safe_regular": True,
+                    }
+                    for path, linkname, terminal_target in provenance.symlinks
+                ],
                 "runtime": provenance.executable_report,
                 "network": "denied-before-protected-phases",
                 "builder_timer_seconds": runtime.SEMANTIC_BUILDER_TIMEOUT_SECONDS,

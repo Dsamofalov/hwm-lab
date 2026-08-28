@@ -564,7 +564,7 @@ def _extract_verified_archive(
             )
             regulars = sorted(
                 (item for item in inventory.records if item.member_type == "regular"),
-                key=lambda item: item.normalized_path,
+                key=lambda item: by_raw[item.raw_name].offset,
             )
 
             # Pass 1a: explicit canonical directories only.
