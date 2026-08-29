@@ -49,6 +49,12 @@ def _suffix(value: object) -> str:
     return Path(value.replace("\\", "/")).suffix.lower()
 
 
+def _type_text(value: object) -> str:
+    if isinstance(value, str):
+        return value
+    return f"<{normalize._json_value_type(value)}>"
+
+
 def _relation_context(edge: dict) -> tuple[str, str]:
     relation = edge.get("relation", edge.get("type", edge.get("kind")))
     context = edge.get("context")
@@ -59,6 +65,31 @@ def _relation_context(edge: dict) -> tuple[str, str]:
 
 def _triples(counter: Counter[tuple[str, str]]) -> list[list[object]]:
     return [[relation, context, count] for (relation, context), count in sorted(counter.items())]
+
+
+def _source_type_counts(counter: Counter[tuple[str, str]]) -> list[list[object]]:
+    return [[suffix, file_type, count] for (suffix, file_type), count in sorted(counter.items())]
+
+
+def _source_type_relations(counter: Counter[tuple[str, str, str, str]]) -> list[list[object]]:
+    return [
+        [suffix, file_type, relation, context, count]
+        for (suffix, file_type, relation, context), count in sorted(counter.items())
+    ]
+
+
+def _source_type_parent_kinds(counter: Counter[tuple[str, str, str]]) -> list[list[object]]:
+    return [
+        [suffix, file_type, parent_kind, count]
+        for (suffix, file_type, parent_kind), count in sorted(counter.items())
+    ]
+
+
+def _source_type_degree_pairs(counter: Counter[tuple[str, str, int, int]]) -> list[list[object]]:
+    return [
+        [suffix, file_type, incoming, outgoing, count]
+        for (suffix, file_type, incoming, outgoing), count in sorted(counter.items())
+    ]
 
 
 def _degree_distribution(values: list[int]) -> dict[str, int]:
@@ -129,6 +160,7 @@ def diagnose_missing_discriminator_nodes(graph: object) -> dict | None:
         family_nodes = families[signature_key]
         signature = json.loads(signature_key)
         ids = {str(node.get("id")) for node in family_nodes}
+        family_by_id = {str(node.get("id")): node for node in family_nodes}
         incoming: Counter[tuple[str, str]] = Counter()
         outgoing: Counter[tuple[str, str]] = Counter()
         parent_relations: Counter[tuple[str, str]] = Counter()
@@ -136,6 +168,13 @@ def diagnose_missing_discriminator_nodes(graph: object) -> dict | None:
         incoming_suffixes: Counter[str] = Counter()
         incoming_degree = Counter({node_id: 0 for node_id in ids})
         outgoing_degree = Counter({node_id: 0 for node_id in ids})
+        source_type_counts: Counter[tuple[str, str]] = Counter()
+        source_type_incoming: Counter[tuple[str, str, str, str]] = Counter()
+        source_type_outgoing: Counter[tuple[str, str, str, str]] = Counter()
+        source_type_parents: Counter[tuple[str, str, str]] = Counter()
+
+        for node in family_nodes:
+            source_type_counts[(_suffix(node.get("source_file")), _type_text(node.get("file_type")))] += 1
 
         for edge in edges:
             if not isinstance(edge, dict):
@@ -146,17 +185,38 @@ def diagnose_missing_discriminator_nodes(graph: object) -> dict | None:
             target_id = None if target is None else str(target)
             relation, context = _relation_context(edge)
             if target_id in ids:
+                target_node = family_by_id[target_id]
+                target_suffix = _suffix(target_node.get("source_file"))
+                target_type = _type_text(target_node.get("file_type"))
                 incoming[(relation, context)] += 1
+                source_type_incoming[(target_suffix, target_type, relation, context)] += 1
                 incoming_degree[target_id] += 1
                 suffix = _suffix(edge.get("source_file"))
                 if suffix:
                     incoming_suffixes[suffix] += 1
                 if relation in _STRUCTURAL_PARENT_RELATIONS:
                     parent_relations[(relation, context)] += 1
-                    parent_kinds[_parent_kind(node_by_id.get(source_id or ""))] += 1
+                    parent_kind = _parent_kind(node_by_id.get(source_id or ""))
+                    parent_kinds[parent_kind] += 1
+                    source_type_parents[(target_suffix, target_type, parent_kind)] += 1
             if source_id in ids:
+                source_node = family_by_id[source_id]
+                source_suffix = _suffix(source_node.get("source_file"))
+                source_type = _type_text(source_node.get("file_type"))
                 outgoing[(relation, context)] += 1
+                source_type_outgoing[(source_suffix, source_type, relation, context)] += 1
                 outgoing_degree[source_id] += 1
+
+        source_type_degrees: Counter[tuple[str, str, int, int]] = Counter()
+        for node_id, node in family_by_id.items():
+            source_type_degrees[
+                (
+                    _suffix(node.get("source_file")),
+                    _type_text(node.get("file_type")),
+                    incoming_degree[node_id],
+                    outgoing_degree[node_id],
+                )
+            ] += 1
 
         same_label_counts: Counter[str] = Counter()
         for node in family_nodes:
@@ -189,6 +249,11 @@ def diagnose_missing_discriminator_nodes(graph: object) -> dict | None:
             "structural_parent_node_kinds": dict(sorted(parent_kinds.items())),
             "incoming_edge_source_suffixes": dict(sorted(incoming_suffixes.items())),
             "same_label_sourced_candidate_counts": dict(sorted(same_label_counts.items())),
+            "source_type_counts": _source_type_counts(source_type_counts),
+            "source_type_incoming_relation_context": _source_type_relations(source_type_incoming),
+            "source_type_outgoing_relation_context": _source_type_relations(source_type_outgoing),
+            "source_type_structural_parent_kinds": _source_type_parent_kinds(source_type_parents),
+            "source_type_degree_pairs": _source_type_degree_pairs(source_type_degrees),
         })
 
     return {
