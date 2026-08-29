@@ -535,6 +535,7 @@ def normalize_graph(graph: object, product_sha: str, product_root: Path) -> tupl
             raise GraphOutputError("canonical node id collision")
         nodes_by_id[ident] = normalized
     edges_by_id: dict[str, dict] = {}
+    omitted_unrepresented_target_edges = 0
     for upstream in graph["edges"]:
         if not isinstance(upstream, dict):
             raise GraphOutputError("Graphify edge is not an object")
@@ -542,22 +543,32 @@ def normalize_graph(graph: object, product_sha: str, product_root: Path) -> tupl
         dst = upstream.get("target", upstream.get("to"))
         if src is None or dst is None:
             raise GraphOutputError("Graphify edge endpoint missing")
-        src_id, dst_id = upstream_to_hwm.get(str(src)), upstream_to_hwm.get(str(dst))
+        kind = _text(upstream.get("relation", upstream.get("type", upstream.get("kind"))),
+                     field="edge kind", max_len=64, nonempty=True)
+        src_text, dst_text = str(src), str(dst)
+        src_id, dst_id = upstream_to_hwm.get(src_text), upstream_to_hwm.get(dst_text)
         if src_id is None or dst_id is None:
+            if (
+                src_id is not None
+                and src_text in raw_node_ids
+                and isinstance(dst, str)
+                and dst_text not in raw_node_ids
+            ):
+                omitted_unrepresented_target_edges += 1
+                continue
             _raise_dangling_edge_inventory(
                 graph["edges"],
                 raw_node_count=len(graph["nodes"]),
                 raw_node_ids=raw_node_ids,
                 upstream_to_hwm=upstream_to_hwm,
             )
-        kind = _text(upstream.get("relation", upstream.get("type", upstream.get("kind"))),
-                     field="edge kind", max_len=64, nonempty=True)
         ident = edge_id(src_id, dst_id, kind)
         normalized = {"id": ident, "source": src_id, "target": dst_id, "kind": kind}
         existing = edges_by_id.get(ident)
         if existing is not None and existing != normalized:
             raise GraphOutputError("canonical edge id collision")
         edges_by_id[ident] = normalized
+    print(f"hwm_omitted_unrepresented_target_edges={omitted_unrepresented_target_edges}", flush=True)
     nodes = sorted(nodes_by_id.values(), key=lambda n: (
         n["path"], n["kind"], n["qualified_name"], n["start_line"], n["end_line"], n["id"]))
     edges = sorted(edges_by_id.values(), key=lambda e: (e["source"], e["target"], e["kind"], e["id"]))

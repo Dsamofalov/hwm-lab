@@ -209,12 +209,15 @@ class T(unittest.TestCase):
   for edges,message in (([1],"Graphify edge is not an object"),([{"source":"a","relation":"calls"}],"Graphify edge endpoint missing"),([{"source":"a","target":"b","relation":{}}],"edge kind must be text")):
    with self.subTest(message=message),tempfile.TemporaryDirectory() as d:
     with self.assertRaisesRegex(normalize.GraphOutputError,message):normalize.normalize_graph({"nodes":d5_explicit_nodes(),"edges":edges},SHA,Path(d))
- def test_15n_d5_node_contract_unchanged_and_no_dangling_edge_is_accepted(self):
+ def test_15n_d6_node_contract_unchanged_and_unrepresented_target_only_is_omitted(self):
   self.assertEqual((normalize._node_kind(d4_file_node()),normalize._node_kind(d4_class_node()),normalize._node_kind(d4_function_node())),("file","class","function"))
   n=d4_class_node();n.update({"type":"module","kind":"function","node_type":"class"});self.assertEqual(normalize._node_kind(n),"module")
-  for edges in ([{"source":"missing","target":"b","relation":"calls"}],[{"source":"a","target":"missing","relation":"calls"}],[{"source":"missing-a","target":"missing-b","relation":"calls"}]):
+  for edges in ([{"source":"missing","target":"b","relation":"calls"}],[{"source":"missing-a","target":"missing-b","relation":"calls"}]):
    with tempfile.TemporaryDirectory() as d:
     with self.assertRaisesRegex(normalize.GraphOutputError,"dangling edge endpoint inventory"):normalize.normalize_graph({"nodes":d5_explicit_nodes(),"edges":edges},SHA,Path(d))
+  with tempfile.TemporaryDirectory() as d:
+   snapshot,encoded,digest=normalize.normalize_graph({"nodes":d5_explicit_nodes(),"edges":[{"source":"a","target":"missing","relation":"calls"}]},SHA,Path(d))
+  self.assertEqual(len(snapshot["nodes"]),2);self.assertEqual(snapshot["edges"],[]);normalize.validate_snapshot(snapshot);self.assertEqual(hashlib.sha256(encoded).hexdigest(),digest)
  def test_16_source_proof_exact_sha(self):
   with tempfile.TemporaryDirectory() as d:
    p=Path(d)/'p';p.write_text(json.dumps({"repository":"Dsamofalov/hwm_predictor","product_sha":"0"*40}))

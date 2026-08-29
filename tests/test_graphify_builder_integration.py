@@ -1,5 +1,5 @@
 from __future__ import annotations
-import hashlib,json,os,shutil,stat,subprocess,tempfile,unittest,urllib.request
+import hashlib,json,os,re,shutil,stat,subprocess,tempfile,unittest,urllib.request
 from pathlib import Path
 import jsonschema
 from graphify_acceptance_runtime import ExactRuntimeSession
@@ -77,6 +77,10 @@ def _health_diagnostic(out):
   safe={"schema":_health_text(obj["schema"],128),"state":_health_text(obj["state"],128),"reason_code":_health_text(obj["reason_code"],256),"detail":_health_text(obj.get("detail",""),HEALTH_DETAIL_MAX)}
  except (KeyError,TypeError,ValueError,UnicodeDecodeError,json.JSONDecodeError):return "health_diagnostic=malformed"
  return "health_diagnostic="+json.dumps(safe,ensure_ascii=True,sort_keys=True,separators=(",",":"))
+def _omission_count(stdout):
+ matches=re.findall(r"(?m)^hwm_omitted_unrepresented_target_edges=(\d+)$",stdout or "")
+ if len(matches)!=1:raise AssertionError(f"expected exactly one omission count, got {matches!r}")
+ return int(matches[0])
 
 class HealthDiagnosticTests(unittest.TestCase):
  def test_failure_health_diagnostic_is_bounded_and_explicit(self):
@@ -127,9 +131,9 @@ class RealGraphifyIntegrationTests(unittest.TestCase):
    g=[x for x in manifest["artifacts"] if x["name"]==policy.GRAPHIFY_PACKAGE][0];print(f"integration_runtime={p.executable_report} artifact_sha256={p.artifact_sha256} inventory_sha256={p.canonical_inventory_sha256}");print(f"integration_wheel={g['filename']} sha256={g['sha256']} network=denied")
    raws=[];digests=[];shas=[]
    for i in range(1,4):
-    f=base/f"fixture-{i}";paths.append(f);sha=_fixture(f);shas.append(sha);proof=base/f"fixture-{i}.proof";_proof(proof,sha);runtime.verify_git_checkout(f,sha);runtime.validate_source_proof(proof,sha);_readonly(f);runtime.assert_product_read_only(f);runtime.verify_git_checkout(f,sha);out=base/f"fixture-out-{i}";r=self._run(executor,session.python,f,sha,proof,wh,out);self.assertIn("hwm_graphify_command="+" ".join(policy.EXACT_GRAPHIFY_COMMAND),r.stdout);self.assertIn(f"hwm_graphify_wheel={policy.GRAPHIFY_WHEEL} sha256={policy.GRAPHIFY_WHEEL_SHA256}",r.stdout);self.assertFalse(TRIPWIRE.exists());raw,digest=self._check(out,sha,schemas);raws.append(raw);digests.append(digest);print(f"integration_fixture_run={i} canonical_sha256={digest} bytes={len(raw)}")
+    f=base/f"fixture-{i}";paths.append(f);sha=_fixture(f);shas.append(sha);proof=base/f"fixture-{i}.proof";_proof(proof,sha);runtime.verify_git_checkout(f,sha);runtime.validate_source_proof(proof,sha);_readonly(f);runtime.assert_product_read_only(f);runtime.verify_git_checkout(f,sha);out=base/f"fixture-out-{i}";r=self._run(executor,session.python,f,sha,proof,wh,out);self.assertIn("hwm_graphify_command="+" ".join(policy.EXACT_GRAPHIFY_COMMAND),r.stdout);self.assertIn(f"hwm_graphify_wheel={policy.GRAPHIFY_WHEEL} sha256={policy.GRAPHIFY_WHEEL_SHA256}",r.stdout);omitted=_omission_count(r.stdout);self.assertEqual(omitted,2);self.assertFalse(TRIPWIRE.exists());raw,digest=self._check(out,sha,schemas);raws.append(raw);digests.append(digest);print(f"integration_fixture_run={i} canonical_sha256={digest} bytes={len(raw)} omitted_unrepresented_target_edges={omitted}")
    self.assertEqual(len(set(shas)),1);self.assertEqual(raws[0],raws[1]);self.assertEqual(raws[1],raws[2]);self.assertEqual(len(set(digests)),1);self.assertFalse(TRIPWIRE.exists());print(f"integration_three_run_digest={digests[0]} runs=3 identical=true")
-   out=base/"real-output";rr=self._run(executor,session.python,real,REAL_PRODUCT_SHA,rp,wh,out);self.assertIn("hwm_graphify_command="+" ".join(policy.EXACT_GRAPHIFY_COMMAND),rr.stdout);self.assertIn(f"hwm_graphify_wheel={policy.GRAPHIFY_WHEEL} sha256={policy.GRAPHIFY_WHEEL_SHA256}",rr.stdout);_,rd=self._check(out,REAL_PRODUCT_SHA,schemas);print(f"integration_real_product_sha={REAL_PRODUCT_SHA} canonical_sha256={rd} network=denied timer_seconds={policy.BUILDER_TIMEOUT_SECONDS}");print("integration_production_graph_publication=none temporary_outputs_only=true")
+   out=base/"real-output";rr=self._run(executor,session.python,real,REAL_PRODUCT_SHA,rp,wh,out);self.assertIn("hwm_graphify_command="+" ".join(policy.EXACT_GRAPHIFY_COMMAND),rr.stdout);self.assertIn(f"hwm_graphify_wheel={policy.GRAPHIFY_WHEEL} sha256={policy.GRAPHIFY_WHEEL_SHA256}",rr.stdout);real_omitted=_omission_count(rr.stdout);_,rd=self._check(out,REAL_PRODUCT_SHA,schemas);print(f"integration_real_product_sha={REAL_PRODUCT_SHA} canonical_sha256={rd} network=denied timer_seconds={policy.BUILDER_TIMEOUT_SECONDS} omitted_unrepresented_target_edges={real_omitted}");print("integration_production_graph_publication=none temporary_outputs_only=true")
   finally:
    session.cleanup();self.assertFalse(session.install_root.exists());self.assertFalse(session.scratch_root.exists());TRIPWIRE.unlink(missing_ok=True)
    for p in paths:_writable(p)
