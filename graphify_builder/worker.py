@@ -11,6 +11,7 @@ import tempfile
 import time
 from pathlib import Path
 
+from .missing_node_diagnostic import diagnose_missing_discriminator_nodes
 from .normalize import (
     GraphOutputError, OversizedSnapshotError, SnapshotSchemaError, canonical_json, normalize_graph,
 )
@@ -125,6 +126,12 @@ def execute(product_root: Path, product_sha: str, wheelhouse: Path, output: Path
             graph = json.loads(graph_path.read_text(encoding="utf-8"))
         except Exception as exc:
             raise GraphOutputError("Graphify graph.json malformed") from exc
+
+        diagnostic = diagnose_missing_discriminator_nodes(graph)
+        if diagnostic is not None:
+            diagnostic_text = canonical_json(diagnostic).decode("utf-8")
+            print("hwm_missing_node_semantic_diagnostic=" + diagnostic_text, flush=True)
+            raise GraphOutputError("missing node semantic diagnostic: " + diagnostic_text)
 
         snapshot, snapshot_bytes, snapshot_sha = normalize_graph(graph, product_sha, product_root)
         metadata = {
