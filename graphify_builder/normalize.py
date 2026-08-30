@@ -456,6 +456,7 @@ _D7A_FAMILY_ORDER = (
     "json_concept",
     "sourceless_reference_stub_family_b",
 )
+_D7A_PINNED_PRODUCT_SHA = "8fd669336b36064e842252d69fb4016cc526a9d4"
 _D7A_PINNED_COUNTS = {
     "python_rationale": 46,
     "json_code": 31,
@@ -724,6 +725,8 @@ def normalize_graph(graph: object, product_sha: str, product_root: Path) -> tupl
     _validate_graphify_nodes(graph["nodes"])
     raw_node_ids = _raw_node_id_index(graph["nodes"])
     omitted_node_ids, d7a_counts = _select_d7a_omissions(graph["nodes"], graph["edges"], product_root)
+    if product_sha == _D7A_PINNED_PRODUCT_SHA:
+        _assert_d7a_pinned_counts(d7a_counts)
     if omitted_node_ids:
         print("hwm_d7a_omitted_nodes=" + canonical_json(d7a_counts).decode("utf-8"), flush=True)
     remaining_nodes = [node for node in graph["nodes"] if str(node["id"]) not in omitted_node_ids]
