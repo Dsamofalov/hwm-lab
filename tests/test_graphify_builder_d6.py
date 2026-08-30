@@ -8,7 +8,7 @@ from unittest import mock
 
 from graphify_builder import normalize
 
-SHA = "8fd669336b36064e842252d69fb4016cc526a9d4"
+SHA = "1111111111111111111111111111111111111111"
 
 
 def explicit_node(node_id: object, kind: str, label: str, path: str, line: str = "L1") -> dict:

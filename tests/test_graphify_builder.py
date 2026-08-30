@@ -3,7 +3,7 @@ import hashlib,json,signal,subprocess,tempfile,time,unittest
 from pathlib import Path
 from unittest import mock
 from graphify_builder import normalize,policy,run,runtime,wheelhouse,worker
-SHA="8fd669336b36064e842252d69fb4016cc526a9d4"
+SHA="1111111111111111111111111111111111111111"
 def graph(): return {"nodes":[{"id":"b","type":"function","label":"pkg.beta","source_file":"pkg/b.py","source_location":"L8-L10"},{"id":"a","type":"class","label":"pkg.Alpha","source_file":"pkg/a.py","source_location":"L2-L6"}],"edges":[{"source":"a","target":"b","relation":"calls"}],"metadata":{"generated_at":"ignored"}}
 def d4_class_node(): return {"_callable":True,"_callable_class":False,"_origin":"source","file_type":"code","id":"pkg_a_a","label":"A","source_file":"a.py","source_location":"L1"}
 def d4_function_node(): return {"_callable":False,"_origin":"source","file_type":"code","id":"pkg_a_f","label":"f()","source_file":"a.py","source_location":"L3"}
@@ -201,9 +201,9 @@ class T(unittest.TestCase):
   self.assertEqual(str(cm.exception),"dangling edge endpoint inventory exceeds bounded detail capacity");self.assertLess(len(str(cm.exception)),100)
  def test_15m_d5_valid_edge_identity_kind_precedence_and_malformed_semantics_unchanged(self):
   with tempfile.TemporaryDirectory() as d:
-   r=Path(d);(r/"pkg").mkdir();out=normalize.normalize_graph(graph(),SHA,r);self.assertEqual(hashlib.sha256(out[1]).hexdigest(),"369094bf66a5d0d87640cf33983bf9033505fc684565a58f63f91ce6e95e733f")
+   r=Path(d);(r/"pkg").mkdir();out=normalize.normalize_graph(graph(),SHA,r);self.assertEqual(hashlib.sha256(out[1]).hexdigest(),"0f22ed1475a331e0a30596b8c2d0e7452aa079db69dd9bc85f95c7b80c0e9fa4")
   g={"nodes":[d4_file_node(),d4_class_node(),d4_function_node()],"edges":[{"source":"pkg_a","target":"pkg_a_a","relation":"contains"},{"source":"pkg_a_a","target":"pkg_a_f","relation":"calls"}]}
-  with tempfile.TemporaryDirectory() as d:out=normalize.normalize_graph(g,SHA,Path(d));self.assertEqual(hashlib.sha256(out[1]).hexdigest(),"529a750769ffc6dbcfaabe743266b8d47cd4916d5470a1985a598680b15256e3")
+  with tempfile.TemporaryDirectory() as d:out=normalize.normalize_graph(g,SHA,Path(d));self.assertEqual(hashlib.sha256(out[1]).hexdigest(),"6748bd6eb4b7f00edbf1eaeadd3933cf54f2d64a7782f2bd139c502a13ad299a")
   for edge,expected in (({"source":"a","target":"b","relation":"r","type":"t","kind":"k"},"r"),({"source":"a","target":"b","type":"t","kind":"k"},"t"),({"source":"a","target":"b","kind":"k"},"k")):
    with tempfile.TemporaryDirectory() as d:s=normalize.normalize_graph({"nodes":d5_explicit_nodes(),"edges":[edge]},SHA,Path(d))[0];self.assertEqual(s["edges"][0]["kind"],expected)
   for edges,message in (([1],"Graphify edge is not an object"),([{"source":"a","relation":"calls"}],"Graphify edge endpoint missing"),([{"source":"a","target":"b","relation":{}}],"edge kind must be text")):
