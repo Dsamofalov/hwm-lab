@@ -426,8 +426,45 @@ def _missing_discriminator_kind(node: dict) -> str | None:
     return kinds[0] if kinds else None
 
 
-def _preflight_missing_node_discriminators(nodes: list) -> None:
-    groups: dict[str, dict] = {}
+_D7A_SIX_KEYS = frozenset({"_origin", "file_type", "id", "label", "source_file", "source_location"})
+_D7A_SOURCED_SIGNATURE = {
+    "keys": sorted(_D7A_SIX_KEYS),
+    "key_types": {key: "string" for key in sorted(_D7A_SIX_KEYS)},
+    "label_matches_source_basename": False,
+    "source_location_shape": "line",
+}
+_D7A_SOURCELESS_SIGNATURE = {
+    "keys": sorted(_D7A_SIX_KEYS),
+    "key_types": {key: "string" for key in sorted(_D7A_SIX_KEYS)},
+    "label_matches_source_basename": False,
+    "source_location_shape": "text",
+}
+_D7A_STRUCTURAL_PARENT_RELATIONS = frozenset({"contains", "defines", "method"})
+_D7A_JSON_CODE_OUTGOING = frozenset({("contains", ""), ("extends", "import"), ("imports", "import")})
+_D7A_JSON_CONCEPT_INCOMING = frozenset({("extends", "import"), ("imports", "import")})
+_D7A_FAMILY_B_INCOMING = frozenset({
+    ("calls", "call"),
+    ("imports", "import"),
+    ("references", "field"),
+    ("references", "generic_arg"),
+    ("references", "parameter_type"),
+    ("references", "return_type"),
+})
+_D7A_FAMILY_ORDER = (
+    "python_rationale",
+    "json_code",
+    "json_concept",
+    "sourceless_reference_stub_family_b",
+)
+_D7A_PINNED_COUNTS = {
+    "python_rationale": 46,
+    "json_code": 31,
+    "json_concept": 10,
+    "sourceless_reference_stub_family_b": 255,
+}
+
+
+def _validate_graphify_nodes(nodes: list) -> None:
     for node in nodes:
         if not isinstance(node, dict):
             raise GraphOutputError("Graphify node is not an object")
@@ -440,6 +477,182 @@ def _preflight_missing_node_discriminators(nodes: list) -> None:
         upstream_id = node.get("id")
         if not isinstance(upstream_id, (str, int, float)) or isinstance(upstream_id, bool):
             raise GraphOutputError("Graphify node id is unusable")
+
+
+def _d7a_edge_signature(edge: object) -> tuple[str, str] | None:
+    if not isinstance(edge, dict):
+        return None
+    _, source = _selected_edge_endpoint(edge, "source", "from")
+    _, target = _selected_edge_endpoint(edge, "target", "to")
+    if source is None or target is None:
+        return None
+    relation = edge.get("relation", edge.get("type", edge.get("kind")))
+    context = edge.get("context")
+    if not isinstance(relation, str) or not relation:
+        return None
+    if context is None:
+        context = ""
+    if not isinstance(context, str):
+        return None
+    return relation, context
+
+
+def _d7a_sourced_exact(node: dict, *, file_type: str, suffix: str, product_root: Path) -> bool:
+    if (
+        set(node) != _D7A_SIX_KEYS
+        or _missing_discriminator_signature(node) != _D7A_SOURCED_SIGNATURE
+        or node.get("_origin") != "ast"
+        or node.get("file_type") != file_type
+        or not node.get("id")
+        or not node.get("label")
+    ):
+        return False
+    source_file = node["source_file"]
+    source_location = node["source_location"]
+    if not source_file or not source_location:
+        return False
+    if Path(source_file.replace("\\", "/")).suffix.lower() != suffix:
+        return False
+    try:
+        normalize_path(source_file, product_root)
+        _lines(node)
+    except GraphOutputError:
+        return False
+    return True
+
+
+def _is_d7a_python_rationale(node: dict, *, incoming: list, outgoing: list,
+                             product_root: Path, sourced_label_count: int) -> bool:
+    del sourced_label_count
+    return (
+        _d7a_sourced_exact(node, file_type="rationale", suffix=".py", product_root=product_root)
+        and not incoming
+        and len(outgoing) == 1
+        and _d7a_edge_signature(outgoing[0]) == ("rationale_for", "")
+    )
+
+
+def _is_d7a_json_code(node: dict, *, incoming: list, outgoing: list,
+                      product_root: Path, sourced_label_count: int) -> bool:
+    del sourced_label_count
+    if not _d7a_sourced_exact(node, file_type="code", suffix=".json", product_root=product_root):
+        return False
+    if len(incoming) != 1 or _d7a_edge_signature(incoming[0]) != ("contains", ""):
+        return False
+    return all(_d7a_edge_signature(edge) in _D7A_JSON_CODE_OUTGOING for edge in outgoing)
+
+
+def _is_d7a_json_concept(node: dict, *, incoming: list, outgoing: list,
+                         product_root: Path, sourced_label_count: int) -> bool:
+    del sourced_label_count
+    return (
+        _d7a_sourced_exact(node, file_type="concept", suffix=".json", product_root=product_root)
+        and len(incoming) == 1
+        and not outgoing
+        and _d7a_edge_signature(incoming[0]) in _D7A_JSON_CONCEPT_INCOMING
+    )
+
+
+def _is_d7a_family_b(node: dict, *, incoming: list, outgoing: list,
+                     product_root: Path, sourced_label_count: int) -> bool:
+    del product_root
+    if (
+        set(node) != _D7A_SIX_KEYS
+        or _missing_discriminator_signature(node) != _D7A_SOURCELESS_SIGNATURE
+        or node.get("_origin") != "ast"
+        or node.get("file_type") != "code"
+        or not node.get("id")
+        or not node.get("label")
+        or node.get("source_file") != ""
+        or node.get("source_location") != ""
+        or not incoming
+        or outgoing
+        or sourced_label_count not in {0, 2}
+    ):
+        return False
+    signatures = [_d7a_edge_signature(edge) for edge in incoming]
+    if any(signature not in _D7A_FAMILY_B_INCOMING for signature in signatures):
+        return False
+    if any(signature is not None and signature[0] in _D7A_STRUCTURAL_PARENT_RELATIONS for signature in signatures):
+        return False
+    return True
+
+
+def _select_d7a_omissions(nodes: list, edges: list, product_root: Path) -> tuple[set[str], dict[str, int]]:
+    _validate_graphify_nodes(nodes)
+    raw_node_ids = _raw_node_id_index(nodes)
+    incoming_by_id = {node_id: [] for node_id in raw_node_ids}
+    outgoing_by_id = {node_id: [] for node_id in raw_node_ids}
+    for edge in edges:
+        if not isinstance(edge, dict):
+            continue
+        _, source = _selected_edge_endpoint(edge, "source", "from")
+        _, target = _selected_edge_endpoint(edge, "target", "to")
+        if source is not None and str(source) in outgoing_by_id:
+            outgoing_by_id[str(source)].append(edge)
+        if target is not None and str(target) in incoming_by_id:
+            incoming_by_id[str(target)].append(edge)
+    sourced_labels: dict[str, int] = {}
+    for node in nodes:
+        label = node.get("label")
+        source_file = node.get("source_file")
+        if isinstance(label, str) and isinstance(source_file, str) and source_file:
+            sourced_labels[label] = sourced_labels.get(label, 0) + 1
+    rules = (
+        ("python_rationale", _is_d7a_python_rationale),
+        ("json_code", _is_d7a_json_code),
+        ("json_concept", _is_d7a_json_concept),
+        ("sourceless_reference_stub_family_b", _is_d7a_family_b),
+    )
+    omitted: set[str] = set()
+    counts = {family: 0 for family in _D7A_FAMILY_ORDER}
+    for node in sorted(nodes, key=lambda item: str(item["id"])):
+        node_id_text = str(node["id"])
+        label = node.get("label")
+        candidate_count = sourced_labels.get(label, 0) if isinstance(label, str) else 0
+        matches = [
+            family
+            for family, predicate in rules
+            if predicate(
+                node,
+                incoming=incoming_by_id[node_id_text],
+                outgoing=outgoing_by_id[node_id_text],
+                product_root=product_root,
+                sourced_label_count=candidate_count,
+            )
+        ]
+        if len(matches) > 1:
+            raise GraphOutputError("ambiguous D7-A omission compatibility rule")
+        if matches:
+            omitted.add(node_id_text)
+            counts[matches[0]] += 1
+    return omitted, counts
+
+
+def _assert_d7a_pinned_counts(counts: dict[str, int]) -> None:
+    if counts != _D7A_PINNED_COUNTS:
+        raise GraphOutputError(
+            "D7-A pinned omission count drift: expected="
+            + canonical_json(_D7A_PINNED_COUNTS).decode("utf-8")
+            + " observed=" + canonical_json(counts).decode("utf-8")
+        )
+
+
+def _d7a_incident_edge(edge: object, omitted_node_ids: set[str]) -> bool:
+    if not isinstance(edge, dict):
+        return False
+    _, source = _selected_edge_endpoint(edge, "source", "from")
+    _, target = _selected_edge_endpoint(edge, "target", "to")
+    return (
+        (source is not None and str(source) in omitted_node_ids)
+        or (target is not None and str(target) in omitted_node_ids)
+    )
+
+
+def _preflight_missing_node_discriminators(nodes: list) -> None:
+    _validate_graphify_nodes(nodes)
+    groups: dict[str, dict] = {}
+    for node in nodes:
         if any(key in node for key in ("type", "kind", "node_type")):
             continue
         if _missing_discriminator_kind(node) is not None:
@@ -508,11 +721,17 @@ def normalize_graph(graph: object, product_sha: str, product_root: Path) -> tupl
         raise GraphOutputError("requested product SHA must be exact 40-hex")
     if not isinstance(graph, dict) or not isinstance(graph.get("nodes"), list) or not isinstance(graph.get("edges"), list):
         raise GraphOutputError("Graphify graph.json must contain node and edge arrays")
-    _preflight_missing_node_discriminators(graph["nodes"])
+    _validate_graphify_nodes(graph["nodes"])
     raw_node_ids = _raw_node_id_index(graph["nodes"])
+    omitted_node_ids, d7a_counts = _select_d7a_omissions(graph["nodes"], graph["edges"], product_root)
+    if omitted_node_ids:
+        print("hwm_d7a_omitted_nodes=" + canonical_json(d7a_counts).decode("utf-8"), flush=True)
+    remaining_nodes = [node for node in graph["nodes"] if str(node["id"]) not in omitted_node_ids]
+    remaining_edges = [edge for edge in graph["edges"] if not _d7a_incident_edge(edge, omitted_node_ids)]
+    _preflight_missing_node_discriminators(remaining_nodes)
     upstream_to_hwm: dict[str, str] = {}
     nodes_by_id: dict[str, dict] = {}
-    for upstream in graph["nodes"]:
+    for upstream in remaining_nodes:
         if not isinstance(upstream, dict):
             raise GraphOutputError("Graphify node is not an object")
         upstream_id = upstream.get("id")
@@ -536,7 +755,7 @@ def normalize_graph(graph: object, product_sha: str, product_root: Path) -> tupl
         nodes_by_id[ident] = normalized
     edges_by_id: dict[str, dict] = {}
     omitted_unrepresented_target_edges = 0
-    for upstream in graph["edges"]:
+    for upstream in remaining_edges:
         if not isinstance(upstream, dict):
             raise GraphOutputError("Graphify edge is not an object")
         src = upstream.get("source", upstream.get("from"))
@@ -557,7 +776,7 @@ def normalize_graph(graph: object, product_sha: str, product_root: Path) -> tupl
                 omitted_unrepresented_target_edges += 1
                 continue
             _raise_dangling_edge_inventory(
-                graph["edges"],
+                remaining_edges,
                 raw_node_count=len(graph["nodes"]),
                 raw_node_ids=raw_node_ids,
                 upstream_to_hwm=upstream_to_hwm,
