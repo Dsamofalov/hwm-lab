@@ -8,7 +8,8 @@ from unittest import mock
 
 from graphify_builder import normalize
 
-SHA = "8fd669336b36064e842252d69fb4016cc526a9d4"
+PINNED_SHA = "8fd669336b36064e842252d69fb4016cc526a9d4"
+SYNTHETIC_SHA = "1111111111111111111111111111111111111111"
 
 
 def explicit(node_id: str, kind: str = "class", label: str | None = None, path: str | None = None, line: int = 1) -> dict:
@@ -87,10 +88,43 @@ def graph_with_all_families() -> dict:
     return {"nodes": nodes, "edges": edges}
 
 
+def pinned_count_graph(*, json_code_count: int = 31) -> dict:
+    nodes = [
+        explicit("keep", "class", "Keep", "src/keep.py"),
+        explicit("json-file", "file", "all.json", "config/all.json"),
+    ]
+    edges: list[dict] = []
+    for i in range(46):
+        node_id = f"r{i}"
+        nodes.append(rationale(node_id))
+        edges.append({"source": node_id, "target": "keep", "relation": "rationale_for"})
+    for i in range(json_code_count):
+        node_id = f"jc{i}"
+        nodes.append(json_code(node_id, "config/all.json"))
+        edges.append({"source": "json-file", "target": node_id, "relation": "contains"})
+    for i in range(10):
+        node_id = f"concept{i}"
+        nodes.append(json_concept(node_id, "config/all.json"))
+        relation = "extends" if i < 9 else "imports"
+        edges.append({"source": "keep", "target": node_id, "relation": relation, "context": "import"})
+    for i in range(4):
+        label = f"Ambiguous{i}"
+        nodes.extend([
+            explicit(f"amb-{i}-a", "class", label, f"src/amb-{i}-a.hpp", 20 + i),
+            explicit(f"amb-{i}-b", "class", label, f"src/amb-{i}-b.hpp", 30 + i),
+        ])
+    for i in range(255):
+        node_id = f"stub{i}"
+        label = f"Ambiguous{i}" if i < 4 else f"ZeroCandidate{i}"
+        nodes.append(stub(node_id, label))
+        edges.append({"source": "keep", "target": node_id, "relation": "references", "context": "parameter_type"})
+    return {"nodes": nodes, "edges": edges}
+
+
 class D7AExactOmissionTests(unittest.TestCase):
-    def normalize(self, graph: dict):
+    def normalize(self, graph: dict, product_sha: str = SYNTHETIC_SHA):
         with tempfile.TemporaryDirectory() as d:
-            return normalize.normalize_graph(graph, SHA, Path(d))
+            return normalize.normalize_graph(graph, product_sha, Path(d))
 
     def assert_rejected(self, node: dict, edges: list[dict], extra_nodes: list[dict] | None = None, message: str | None = None):
         g = {
@@ -219,48 +253,32 @@ class D7AExactOmissionTests(unittest.TestCase):
                 normalize._select_d7a_omissions([explicit("keep"), node], edges, Path("."))
 
     def test_exact_pinned_family_counts_and_count_drift_fail_closed(self):
-        nodes = [
-            explicit("keep", "class", "Keep", "src/keep.py"),
-            explicit("json-file", "file", "all.json", "config/all.json"),
-        ]
-        edges: list[dict] = []
-        for i in range(46):
-            node_id = f"r{i}"
-            nodes.append(rationale(node_id))
-            edges.append({"source": node_id, "target": "keep", "relation": "rationale_for"})
-        for i in range(31):
-            node_id = f"jc{i}"
-            nodes.append(json_code(node_id, "config/all.json"))
-            edges.append({"source": "json-file", "target": node_id, "relation": "contains"})
-        for i in range(10):
-            node_id = f"concept{i}"
-            nodes.append(json_concept(node_id, "config/all.json"))
-            relation = "extends" if i < 9 else "imports"
-            edges.append({"source": "keep", "target": node_id, "relation": relation, "context": "import"})
-        for i in range(4):
-            label = f"Ambiguous{i}"
-            nodes.extend([
-                explicit(f"amb-{i}-a", "class", label, f"src/amb-{i}-a.hpp", 20 + i),
-                explicit(f"amb-{i}-b", "class", label, f"src/amb-{i}-b.hpp", 30 + i),
-            ])
-        for i in range(255):
-            node_id = f"stub{i}"
-            label = f"Ambiguous{i}" if i < 4 else f"ZeroCandidate{i}"
-            nodes.append(stub(node_id, label))
-            edges.append({"source": "keep", "target": node_id, "relation": "references", "context": "parameter_type"})
+        graph = pinned_count_graph()
         expected = {
             "python_rationale": 46,
             "json_code": 31,
             "json_concept": 10,
             "sourceless_reference_stub_family_b": 255,
         }
-        omitted, counts = normalize._select_d7a_omissions(nodes, edges, Path("."))
+        omitted, counts = normalize._select_d7a_omissions(graph["nodes"], graph["edges"], Path("."))
         self.assertEqual(counts, expected)
         self.assertEqual(len(omitted), 342)
         normalize._assert_d7a_pinned_counts(counts)
         drift = dict(counts); drift["json_code"] -= 1
         with self.assertRaisesRegex(normalize.GraphOutputError, "D7-A pinned omission count drift"):
             normalize._assert_d7a_pinned_counts(drift)
+
+    def test_production_path_pinned_sha_accepts_exact_d7a_counts(self):
+        snapshot, _, _ = self.normalize(pinned_count_graph(), PINNED_SHA)
+        self.assertEqual(snapshot["product_sha"], PINNED_SHA)
+
+    def test_production_path_pinned_sha_rejects_count_drift(self):
+        with self.assertRaisesRegex(normalize.GraphOutputError, "D7-A pinned omission count drift"):
+            self.normalize(pinned_count_graph(json_code_count=30), PINNED_SHA)
+
+    def test_production_path_non_pinned_sha_does_not_require_pinned_counts(self):
+        snapshot, _, _ = self.normalize(graph_with_all_families(), SYNTHETIC_SHA)
+        self.assertEqual(snapshot["product_sha"], SYNTHETIC_SHA)
 
     def test_all_incident_edges_removed_nonincident_graph_is_byte_exact(self):
         baseline = {
