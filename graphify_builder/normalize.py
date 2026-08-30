@@ -650,13 +650,94 @@ def _d7a_incident_edge(edge: object, omitted_node_ids: set[str]) -> bool:
     )
 
 
-def _preflight_missing_node_discriminators(nodes: list) -> None:
+_D7B_CPP_SUFFIXES = (".cpp", ".hpp")
+_D7B_PINNED_PRODUCT_SHA = _D7A_PINNED_PRODUCT_SHA
+_D7B_PINNED_COUNTS = {".cpp": 50, ".hpp": 333}
+_D7B_STRUCTURAL_PARENT = ("defines", "field")
+
+
+def _select_d7b_cpp_source_ast_kinds(nodes: list, edges: list, product_root: Path) -> tuple[dict[str, str], dict[str, int], dict[str, int]]:
+    _validate_graphify_nodes(nodes)
+    raw_node_ids = _raw_node_id_index(nodes)
+    node_by_id = {str(node["id"]): node for node in nodes}
+    incoming_by_id = {node_id: [] for node_id in raw_node_ids}
+    outgoing_by_id = {node_id: [] for node_id in raw_node_ids}
+    for edge in edges:
+        if not isinstance(edge, dict):
+            continue
+        _, source = _selected_edge_endpoint(edge, "source", "from")
+        _, target = _selected_edge_endpoint(edge, "target", "to")
+        if source is not None and str(source) in outgoing_by_id:
+            outgoing_by_id[str(source)].append(edge)
+        if target is not None and str(target) in incoming_by_id:
+            incoming_by_id[str(target)].append(edge)
+
+    source_counts = {suffix: 0 for suffix in _D7B_CPP_SUFFIXES}
+    classified_counts = {suffix: 0 for suffix in _D7B_CPP_SUFFIXES}
+    classified: dict[str, str] = {}
+    for node in sorted(nodes, key=lambda item: str(item["id"])):
+        if any(key in node for key in ("type", "kind", "node_type")):
+            continue
+        source_file = node.get("source_file")
+        suffix = (
+            Path(source_file.replace("\\", "/")).suffix.lower()
+            if isinstance(source_file, str) and source_file else ""
+        )
+        if suffix not in _D7B_CPP_SUFFIXES:
+            continue
+        if not _d7a_sourced_exact(node, file_type="code", suffix=suffix, product_root=product_root):
+            continue
+        source_counts[suffix] += 1
+        node_id_text = str(node["id"])
+        if outgoing_by_id[node_id_text]:
+            continue
+        structural_incoming = []
+        for edge in incoming_by_id[node_id_text]:
+            relation = edge.get("relation", edge.get("type", edge.get("kind")))
+            if isinstance(relation, str) and relation in _D7A_STRUCTURAL_PARENT_RELATIONS:
+                structural_incoming.append(edge)
+        if len(structural_incoming) != 1:
+            continue
+        parent_edge = structural_incoming[0]
+        if _d7a_edge_signature(parent_edge) != _D7B_STRUCTURAL_PARENT:
+            continue
+        _, parent_id = _selected_edge_endpoint(parent_edge, "source", "from")
+        parent = node_by_id.get(str(parent_id))
+        if parent is None:
+            continue
+        if any(key in parent for key in ("type", "kind", "node_type")):
+            parent_kind = _node_kind(parent)
+        else:
+            parent_kind = _missing_discriminator_kind(parent)
+        if parent_kind != "class":
+            continue
+        classified[node_id_text] = "field"
+        classified_counts[suffix] += 1
+    return classified, source_counts, classified_counts
+
+
+def _assert_d7b_pinned_counts(source_counts: dict[str, int], classified_counts: dict[str, int]) -> None:
+    if source_counts != _D7B_PINNED_COUNTS or classified_counts != _D7B_PINNED_COUNTS:
+        raise GraphOutputError(
+            "D7-B pinned classification count drift: expected="
+            + canonical_json(_D7B_PINNED_COUNTS).decode("utf-8")
+            + " source=" + canonical_json(source_counts).decode("utf-8")
+            + " classified=" + canonical_json(classified_counts).decode("utf-8")
+        )
+
+
+def _preflight_missing_node_discriminators(nodes: list, d7b_kinds: dict[str, str] | None = None) -> None:
     _validate_graphify_nodes(nodes)
     groups: dict[str, dict] = {}
+    d7b_kinds = d7b_kinds or {}
     for node in nodes:
         if any(key in node for key in ("type", "kind", "node_type")):
             continue
-        if _missing_discriminator_kind(node) is not None:
+        fallback = _missing_discriminator_kind(node)
+        d7b_kind = d7b_kinds.get(str(node["id"]))
+        if fallback is not None and d7b_kind is not None and fallback != d7b_kind:
+            raise GraphOutputError("ambiguous missing-discriminator node kind")
+        if fallback is not None or d7b_kind is not None:
             continue
         signature = _missing_discriminator_signature(node)
         signature_key = canonical_json(signature).decode("utf-8")
@@ -694,9 +775,13 @@ def _preflight_missing_node_discriminators(nodes: list) -> None:
     raise GraphOutputError(detail)
 
 
-def _node_kind(node: dict) -> str:
+def _node_kind(node: dict, d7b_kind: str | None = None) -> str:
     if not any(key in node for key in ("type", "kind", "node_type")):
         fallback = _missing_discriminator_kind(node)
+        if fallback is not None and d7b_kind is not None and fallback != d7b_kind:
+            raise GraphOutputError("ambiguous missing-discriminator node kind")
+        if d7b_kind is not None:
+            return d7b_kind
         if fallback is not None:
             return fallback
     value = node.get("type", node.get("kind", node.get("node_type")))
@@ -731,7 +816,12 @@ def normalize_graph(graph: object, product_sha: str, product_root: Path) -> tupl
         print("hwm_d7a_omitted_nodes=" + canonical_json(d7a_counts).decode("utf-8"), flush=True)
     remaining_nodes = [node for node in graph["nodes"] if str(node["id"]) not in omitted_node_ids]
     remaining_edges = [edge for edge in graph["edges"] if not _d7a_incident_edge(edge, omitted_node_ids)]
-    _preflight_missing_node_discriminators(remaining_nodes)
+    d7b_kinds, d7b_source_counts, d7b_classified_counts = _select_d7b_cpp_source_ast_kinds(
+        remaining_nodes, remaining_edges, product_root
+    )
+    if product_sha == _D7B_PINNED_PRODUCT_SHA and any(d7b_source_counts.values()):
+        _assert_d7b_pinned_counts(d7b_source_counts, d7b_classified_counts)
+    _preflight_missing_node_discriminators(remaining_nodes, d7b_kinds)
     upstream_to_hwm: dict[str, str] = {}
     nodes_by_id: dict[str, dict] = {}
     for upstream in remaining_nodes:
@@ -741,7 +831,7 @@ def normalize_graph(graph: object, product_sha: str, product_root: Path) -> tupl
         if not isinstance(upstream_id, (str, int, float)) or isinstance(upstream_id, bool):
             raise GraphOutputError("Graphify node id is unusable")
         upstream_id = str(upstream_id)
-        kind = _node_kind(upstream)
+        kind = _node_kind(upstream, d7b_kinds.get(upstream_id))
         path = normalize_path(upstream.get("source_file", upstream.get("path")), product_root)
         qname = _qualified_name(upstream)
         start, end = _lines(upstream)
